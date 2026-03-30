@@ -282,8 +282,8 @@ try:
     # Oblique shock should agree within ~10% (thin-airfoil regime)
     M, alpha_deg = 1.5, 3.0
     alpha_rad = math.radians(alpha_deg)
-    rho  = 0.0889   # kg/m³ at 20 km ISA
-    a_s  = 295.1    # m/s  speed of sound at 20 km ISA
+    rho  = 0.0347   # kg/m³ at 25.9 km ISA (SR-71 Blackbird cruise, 85,000 ft)
+    a_s  = 295.1    # m/s  speed of sound at 25.9 km ISA (T=216.65 K, isothermal above 11 km)
     q    = 0.5 * rho * (M * a_s)**2
 
     dCp_ackeret = 4 * alpha_rad / math.sqrt(M**2 - 1)
@@ -303,7 +303,7 @@ try:
            f"panel_pressure={dp_panel/1e3:.4f} kPa,  oblique={dp_oblique/1e3:.4f} kPa")
 
     # ── 5b  Higher Mach → higher pressure (monotonicity) ─────────────────────────
-    # Each Mach has its own dynamic pressure (same altitude 20 km, rho=0.0889, a=295.1)
+    # Each Mach has its own dynamic pressure (same altitude 25.9 km, rho=0.0347, a=295.1)
     # At fixed altitude: q = 0.5*rho*(M*a)^2 ∝ M² — this is the physically correct comparison
     def _q(M_): return 0.5 * rho * (M_ * a_s)**2
     dp_17 = panel_pressure(1.7, alpha_deg, _q(1.7), gamma)
@@ -408,7 +408,7 @@ try:
     pairs  = detect_balance_pairs(angles)
 
     def _run(mach):
-        r = optimize_wing(wing=wing, mach=mach, altitude_m=20_000,
+        r = optimize_wing(wing=wing, mach=mach, altitude_m=25_900,
                           alpha_deg=3.0, mat=mat, angles_half_deg=angles,
                           n_load=2.5, n_stations=5, rf_min=1.5,
                           t_min=0.05e-3, t_init=0.15e-3,
@@ -427,7 +427,7 @@ try:
     from composite_panel.optimizer import optimize_wing
     from composite_panel import wing_panel_loads
 
-    r17 = optimize_wing(wing=wing, mach=1.7, altitude_m=20_000,
+    r17 = optimize_wing(wing=wing, mach=1.7, altitude_m=25_900,
                         alpha_deg=3.0, mat=mat, angles_half_deg=angles,
                         n_load=2.5, n_stations=8, rf_min=1.5,
                         t_min=0.05e-3, t_init=0.15e-3,
@@ -440,12 +440,12 @@ try:
            f"h_root={h_root*1e3:.2f} mm,  h_tip={h_tip*1e3:.2f} mm")
 
     # ── Load factor scaling: 3g should give ~20% more mass than 2.5g ────────
-    r25 = optimize_wing(wing=wing, mach=1.7, altitude_m=20_000,
+    r25 = optimize_wing(wing=wing, mach=1.7, altitude_m=25_900,
                         alpha_deg=3.0, mat=mat, angles_half_deg=angles,
                         n_load=2.5, n_stations=5, rf_min=1.5,
                         t_min=0.05e-3, t_init=0.15e-3,
                         balance_pairs=pairs, rho_kg_m3=1600.0)
-    r30 = optimize_wing(wing=wing, mach=1.7, altitude_m=20_000,
+    r30 = optimize_wing(wing=wing, mach=1.7, altitude_m=25_900,
                         alpha_deg=3.0, mat=mat, angles_half_deg=angles,
                         n_load=3.0, n_stations=5, rf_min=1.5,
                         t_min=0.05e-3, t_init=0.15e-3,

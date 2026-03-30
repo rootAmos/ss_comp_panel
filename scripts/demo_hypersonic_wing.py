@@ -74,7 +74,7 @@ PANEL_A    = 0.50
 PANEL_B    = 0.20
 ETAS       = _np.linspace(0.05, 0.95, 12)
 N_STATIONS = len(ETAS)
-ALT_M      = 20_000
+ALT_M      = 25_900   # SR-71 Blackbird cruise altitude (85,000 ft)
 ALPHA_DEG  = 3.0
 N_LOAD     = 2.5
 
