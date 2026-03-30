@@ -54,19 +54,35 @@ Core dependencies (`numpy`, `matplotlib`, `aerosandbox`) are declared in `pyproj
 
 ---
 
-## Running tests
+## Testing and validation
+
+### Unit tests
 
 ```bash
 pytest tests/
 ```
 
-67 tests across CLT, failure criteria (including Hashin), buckling (including bend-twist coupling warnings), input parsing, and basic integration checks.
+67 tests across CLT, failure criteria (Tsai-Wu, Hashin, max-stress), buckling (including bend-twist coupling detection), input parsing, and basic integration checks.
 
-For regression checks against analytical reference solutions (material properties vs CMH-17, Timoshenko buckling, Ackeret pressure, optimizer KKT conditions):
+### Analytical validation
 
 ```bash
 python scripts/validate_model.py
 ```
+
+`validate_model.py` checks the implementation against known analytical results across 7 blocks:
+
+| Block | What is checked | Reference |
+|---|---|---|
+| 1 | IM7/8552 elastic constants and strengths vs CMH-17 B-basis | CMH-17-1F Vol. 2 Ch. 4 |
+| 2 | CLT limit cases — A11 exact formula, B=0 for symmetric layups, quasi-isotropic symmetry | Jones (1999) |
+| 3 | Tsai-Wu RF = 1.0 at each uniaxial failure boundary; linear scaling with load | Tsai & Wu (1971) |
+| 4 | Nxx_cr matches Timoshenko closed form for [0]8; cubic h³ scaling | Timoshenko & Gere (1961) |
+| 5 | Ackeret ΔCp within 10% of oblique shock at M=1.5; Prandtl-Glauert at M=0.6 | Ackeret (1925) |
+| 6 | Optimizer KKT: RF at optimum equals rf_min (active constraint) | — |
+| 7 | Physics monotonicity: mass increases with Mach and load factor; root thicker than tip | — |
+
+Output is a colour-coded PASS/FAIL summary with tolerances and deviation from reference values.
 
 ---
 
