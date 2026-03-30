@@ -466,6 +466,57 @@ class Laminate:
             lines.append("    " + "  ".join(f"{v:10.3f}" for v in row))
         return "\n".join(lines)
 
+    # ------------------------------------------------------------------
+    # Laminate classification
+    # ------------------------------------------------------------------
+
+    @property
+    def is_symmetric(self) -> bool:
+        """
+        True if the ply stack is symmetric about the mid-plane.
+
+        A laminate is symmetric when the sequence of (angle, thickness) tuples
+        is a palindrome.  Symmetric laminates have B = 0 identically.
+
+        Angles are compared to within 0.1° and thicknesses to within 1 µm.
+        """
+        n = len(self.plies)
+        for k in range(n // 2):
+            p_bot = self.plies[k]
+            p_top = self.plies[n - 1 - k]
+            if (abs(p_bot.angle_deg - p_top.angle_deg) > 0.1 or
+                    abs(p_bot.thickness - p_top.thickness) > 1e-6):
+                return False
+        return True
+
+    @property
+    def is_balanced(self) -> bool:
+        """
+        True if the laminate is balanced (A16 = A26 ≈ 0).
+
+        A laminate is balanced when every off-axis ply at +θ has a
+        corresponding −θ ply of equal thickness.  Equivalently,
+        |A16| and |A26| are both below 0.1 % of sqrt(A11·A66).
+
+        Non-zero A16/A26 causes shear-extension coupling (undesirable for
+        straight-running loads but exploitable for aeroelastic tailoring).
+        """
+        A = self.A
+        scale = float(np.sqrt(abs(A[0, 0] * A[2, 2]))) + 1e-30
+        return (abs(A[0, 2]) / scale < 1e-3 and
+                abs(A[1, 2]) / scale < 1e-3)
+
+    @property
+    def lamination_params(self) -> dict:
+        """
+        Compute the 12 lamination parameters for this laminate.
+
+        Returns a dict with keys xi1A..xi4A, xi1B..xi4B, xi1D..xi4D.
+        See lamination_parameters.lamination_parameters() for full docs.
+        """
+        from .lamination_parameters import lamination_parameters as _lp
+        return _lp(self)
+
     def __repr__(self) -> str:
         stack = "/".join(str(int(p.angle_deg)) for p in self.plies)
         return f"Laminate([{stack}], h={self._h*1e3:.3f} mm)"

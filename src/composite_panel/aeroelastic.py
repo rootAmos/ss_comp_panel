@@ -12,7 +12,39 @@ Iterative Euler-Bernoulli approach (root-clamped cantilever):
 
 Sign: upward theta on a swept wing → nose-down twist → delta_alpha < 0 (relief).
 
+AEROELASTIC TAILORING WITH UNBALANCED LAMINATES
+================================================
+For an unbalanced laminate, D16 and D26 are non-zero.  These terms introduce
+bend-twist coupling: when the wing bends upward, an additional torsional
+rotation is induced independently of sweep geometry.
+
+Using the simplified coupled-beam model (Bisplinghoff et al., 1955 §8.3):
+
+    EI · w'' = q(y)         (bending equation)
+    GJ · φ'' = -EK · w''   (torsion driven by bending curvature)
+
+where the coupling stiffness EK = 2 · D16 · b_box relates the bending
+curvature to the induced torsion, and GJ = 4 · D66 · b_box is the
+closed-section torsional stiffness of the wing box.
+
+Integrating the torsion equation gives:
+    φ(y) ≈ -(EK/GJ) · θ(y)   (bend-twist angle at span station y)
+
+so the total effective AoA change becomes:
+    Δα(y) = -θ(y)·tan(Λ) + φ(y)
+           = -θ(y) · [tan(Λ) + EK/GJ]
+
+A positive EK/GJ ratio amplifies the wash-out (beneficial load relief on
+forward-swept or highly loaded wings); a negative ratio reduces it (wash-in,
+used for divergence suppression).  The optimal coupling magnitude is
+determined by the aeroelastic tailoring optimisation.
+
+This formulation is valid when |EK| << sqrt(EI·GJ) (weak coupling regime),
+which is satisfied for typical composite wing skins with moderate D16.
+
 Ref: Bisplinghoff, Ashley & Halfman — Aeroelasticity (Dover, 1955)
+     Weisshaar, T.A. — Aeroelastic tailoring of forward swept composite wings
+     (J. Aircraft, 1981, 18(8), pp. 669-676)
 """
 
 from __future__ import annotations
@@ -20,7 +52,7 @@ from __future__ import annotations
 import math
 import warnings
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as _np
 
@@ -93,6 +125,81 @@ def wing_bending_stiffness(
     return EI
 
 
+def wing_torsional_stiffness(
+    wing:               WingGeometry,
+    laminate_D66:       float,
+    etas:               _np.ndarray,
+    box_chord_fraction: float = 0.50,
+) -> _np.ndarray:
+    """
+    Spanwise GJ(y) from CLT D66 (twisting stiffness), closed-box model.
+
+    For a thin-walled closed rectangular cross-section of width b_box and
+    height h_box, the Saint-Venant torsional stiffness is approximately:
+
+        GJ ≈ 4 · D66 · b_box
+
+    where D66 is the laminate twisting stiffness [N·m].
+
+    Parameters
+    ----------
+    wing               : WingGeometry
+    laminate_D66       : float
+        Laminate D[2,2] (twisting stiffness) [N·m].
+    etas               : np.ndarray
+        Span fraction stations (0 = root, 1 = tip).
+    box_chord_fraction : float
+        Wing-box chord fraction (default 0.50).
+
+    Returns
+    -------
+    GJ : np.ndarray   [N·m²]
+    """
+    GJ = _np.zeros(len(etas))
+    for i, eta in enumerate(etas):
+        c     = wing.chord(eta)
+        b_box = box_chord_fraction * c
+        GJ[i] = 4.0 * laminate_D66 * b_box
+    return GJ
+
+
+def wing_coupling_stiffness(
+    wing:               WingGeometry,
+    laminate_D16:       float,
+    etas:               _np.ndarray,
+    box_chord_fraction: float = 0.50,
+) -> _np.ndarray:
+    """
+    Spanwise bend-twist coupling stiffness EK(y) from laminate D16.
+
+    For the simplified coupled Euler-Bernoulli/Saint-Venant beam:
+
+        EK ≈ 2 · D16 · b_box
+
+    A positive D16 (fibres rotated toward +θ from 0°) causes upward bending
+    to induce nose-down twist on a typical swept-back wing — i.e. wash-out —
+    which reduces the effective angle of attack and relieves lift loads.
+
+    Parameters
+    ----------
+    wing               : WingGeometry
+    laminate_D16       : float
+        Laminate D[0,2] [N·m].  Non-zero only for unbalanced laminates.
+    etas               : np.ndarray
+    box_chord_fraction : float
+
+    Returns
+    -------
+    EK : np.ndarray   [N·m²]
+    """
+    EK = _np.zeros(len(etas))
+    for i, eta in enumerate(etas):
+        c     = wing.chord(eta)
+        b_box = box_chord_fraction * c
+        EK[i] = 2.0 * laminate_D16 * b_box
+    return EK
+
+
 
 
 def euler_bernoulli_cantilever(
@@ -149,21 +256,56 @@ def euler_bernoulli_cantilever(
 
 
 def static_aeroelastic(
-    wing:           WingGeometry,
-    mach:           float,
-    altitude_m:     float,
-    alpha_rigid_deg: float,
-    n_load:         float,
-    laminate_A11:   float,
-    laminate_h:     float,
-    n_stations:     int   = 20,
-    box_fraction:   float = 0.50,
-    max_iter:       int   = 10,
-    tol_deg:        float = 0.01,
+    wing:             WingGeometry,
+    mach:             float,
+    altitude_m:       float,
+    alpha_rigid_deg:  float,
+    n_load:           float,
+    laminate_A11:     float,
+    laminate_h:       float,
+    laminate_D16:     float = 0.0,
+    laminate_D66:     Optional[float] = None,
+    n_stations:       int   = 20,
+    box_fraction:     float = 0.50,
+    max_iter:         int   = 10,
+    tol_deg:          float = 0.01,
 ) -> AeroelasticResult:
     """
     Iterative static aeroelastic solution.  Converges when max spanwise
     |delta_alpha| change < tol_deg.  A11/h assumed spanwise-constant.
+
+    For unbalanced laminates (D16 ≠ 0), an additional bend-twist coupling
+    contribution is included via the simplified coupled-beam model:
+
+        Δα_total(y) = −θ(y) · tan(Λ)   +  φ_BT(y)
+
+    where φ_BT(y) = −(EK/GJ) · θ(y) is the torsional rotation driven by
+    bending through the coupling stiffness EK = 2·D16·b_box and the
+    closed-section torsional stiffness GJ = 4·D66·b_box.
+
+    Parameters
+    ----------
+    wing              : WingGeometry
+    mach              : float
+    altitude_m        : float
+    alpha_rigid_deg   : float    Rigid-body angle of attack [deg]
+    n_load            : float    Load factor
+    laminate_A11      : float    Laminate A[0,0] [N/m] — drives EI
+    laminate_h        : float    Laminate thickness [m]
+    laminate_D16      : float    Laminate D[0,2] [N·m] — bend-twist coupling
+                                 (default 0 → balanced laminate, no BT coupling)
+    laminate_D66      : float or None
+                                 Laminate D[2,2] [N·m] — torsional stiffness.
+                                 If None and D16≠0, a warning is raised and the
+                                 BT coupling term is ignored.
+    n_stations        : int
+    box_fraction      : float
+    max_iter          : int
+    tol_deg           : float
+
+    Returns
+    -------
+    AeroelasticResult
     """
     etas = _np.linspace(0.02, 0.98, n_stations)
     y    = etas * wing.semi_span        # physical span coordinate [m]
@@ -173,9 +315,25 @@ def static_aeroelastic(
 
     # ── Atmosphere ────────────────────────────────────────────────────────────
     rho, a_sound = isa_atmosphere(altitude_m)
-    q_inf        = 0.5 * rho * (mach * a_sound) ** 2
 
     EI = wing_bending_stiffness(wing, laminate_A11, laminate_h, etas, box_fraction)
+
+    # ── Bend-twist coupling from unbalanced laminate (D16 ≠ 0) ───────────────
+    use_bt_coupling = abs(laminate_D16) > 0.0
+    if use_bt_coupling:
+        if laminate_D66 is None:
+            warnings.warn(
+                "laminate_D16 is non-zero but laminate_D66 was not supplied. "
+                "Bend-twist coupling contribution will be ignored.  "
+                "Pass laminate_D66=Laminate.D[2,2] to activate aeroelastic tailoring.",
+                stacklevel=2,
+            )
+            use_bt_coupling = False
+        else:
+            GJ = wing_torsional_stiffness(wing, laminate_D66, etas, box_fraction)
+            EK = wing_coupling_stiffness(wing, laminate_D16, etas, box_fraction)
+            # Ratio φ(y) = -(EK/GJ)·θ(y); safe division
+            bt_ratio = _np.where(_np.abs(GJ) > 1e-30, EK / GJ, 0.0)
 
     alpha_eff   = _np.full(n_stations, alpha_rigid_deg)
     loads_rigid = [
@@ -201,7 +359,16 @@ def static_aeroelastic(
 
         theta, w_deflect, _ = euler_bernoulli_cantilever(y, EI, q_lift)
 
-        delta_alpha_deg = _np.degrees(-theta * tan_sweep)   # washout: -theta*tan(sweep)
+        # Geometric washout from sweep
+        delta_alpha_sweep = -theta * tan_sweep
+
+        # Bend-twist coupling washout (zero for balanced laminates)
+        if use_bt_coupling:
+            delta_alpha_bt = -theta * bt_ratio   # φ_BT = -(EK/GJ)·θ
+        else:
+            delta_alpha_bt = _np.zeros(n_stations)
+
+        delta_alpha_deg = _np.degrees(delta_alpha_sweep + delta_alpha_bt)
         alpha_new       = alpha_rigid_deg + delta_alpha_deg
 
         max_change = float(_np.max(_np.abs(alpha_new - alpha_eff)))
