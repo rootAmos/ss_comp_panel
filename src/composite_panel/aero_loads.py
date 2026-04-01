@@ -7,9 +7,7 @@ Includes single-panel (Ackeret) and multi-panel wing-level loads.
 PURPOSE
 =======
 This module converts flight conditions (Mach, altitude, AoA) into the running
-loads [Nxx, Nyy, Nxy, Mxx] that drive the structural CLT analysis.  It sits at
-the interface between aerodynamics and structures — the kind of coupling that is
-central to multidisciplinary design optimisation (MDO) for supersonic airframes.
+loads [Nxx, Nyy, Nxy, Mxx] that drive the structural CLT analysis.  
 
 Three pressure models are provided, with automatic regime selection via panel_pressure():
 
@@ -67,17 +65,7 @@ Dynamic pressure requires local density and speed of sound.  The built-in ISA
 Accuracy is sufficient for conceptual sizing.  For aeroelastic analysis at
 specific flight points, use actual atmospheric profile data.
 
-EXTENSIBILITY FOR MDO
-=====================
-The PanelLoads dataclass is designed to be a clean interface between any
-aero solver and the CLT analysis:
-  - Replace supersonic_panel_loads() with a CFD-derived loader
-  - Or with a loads database lookup (see project roadmap)
-  - The downstream CLT analysis (laminate.py, failure.py) is unchanged
 
-This separation of concerns is what makes the architecture scalable for MDO
-workflows — aero and structures talk through a well-defined load vector, not
-through each other's internals.
 
 MODIFIED NEWTONIAN IMPACT THEORY — PHYSICS BACKGROUND
 =======================================================

@@ -6,7 +6,6 @@ Load case container and CSV-backed database for multi-condition sizing.
 CSV schema: name, Nxx, Nyy, Nxy [required],
             Mxx, Myy, Mxy, source, eta, description [optional]
 Units: N/m (running forces), N.m/m (moments).  Compression negative.
-Lines starting with '#' are skipped.
 
 Refs: CS-25 §25.305, MIL-A-8861
 """
@@ -33,7 +32,7 @@ class LoadCase:
 
     Attributes
     ----------
-    name        : human-readable identifier (e.g. 'M1.7_2.5g_root')
+    name        : identifier (e.g. 'M1.7_2.5g_root')
     Nxx         : spanwise running force [N/m]
     Nyy         : chordwise running force [N/m]
     Nxy         : in-plane shear force [N/m]
@@ -97,10 +96,6 @@ class LoadCase:
 class LoadsDatabase:
     """
     Ordered collection of LoadCase objects with CSV I/O.
-
-    In practice a loads database is produced by an aero analysis sweep
-    (CFD, VLM, semi-empirical) and consumed by the structures sizing tool.
-    This class is the handshake between the two.
 
     Usage
     -----
