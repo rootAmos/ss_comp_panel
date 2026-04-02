@@ -24,7 +24,12 @@ from typing import List, Optional
 
 import numpy as _np
 
-from .aero_loads import WingGeometry, wing_panel_loads, PanelLoads, _isa as isa_atmosphere
+try:
+    from .aero_loads import WingGeometry, wing_panel_loads, PanelLoads, _isa as isa_atmosphere
+except ImportError:
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    from composite_panel.aero_loads import WingGeometry, wing_panel_loads, PanelLoads, _isa as isa_atmosphere
 
 
 
@@ -240,3 +245,34 @@ def static_aeroelastic(
         converged         = converged,
         aeroelastic_relief= relief,
     )
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.stdout.reconfigure(encoding="utf-8")
+    wing = WingGeometry(
+        semi_span    = 4.5,     # m  — half-span
+        root_chord   = 2.0,     # m
+        taper_ratio  = 0.3,     # tip/root chord
+        sweep_le_deg = 45.0,    # deg  leading-edge sweep
+        t_over_c     = 0.04,    # structural box depth fraction
+        mtow_n       = 150_000.0,  # N  max take-off weight
+    )
+
+    # IM7/8552 [0/45/-45/90]s 8-ply laminate (h ~ 1 mm)
+    # Ex ~ 52 GPa  →  A11 = Ex * h = 52e9 * 1e-3 = 52e6 N/m
+    laminate_A11 = 52e6   # N/m
+    laminate_h   = 1.0e-3  # m
+
+    result = static_aeroelastic(
+        wing             = wing,
+        mach             = 1.7,
+        altitude_m       = 15_000.0,
+        alpha_rigid_deg  = 3.5,
+        n_load           = 2.5,
+        laminate_A11     = laminate_A11,
+        laminate_h       = laminate_h,
+        n_stations       = 20,
+        box_fraction     = 0.50,
+    )
+    print(result.summary())

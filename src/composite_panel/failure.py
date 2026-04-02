@@ -86,7 +86,12 @@ from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional
-from .ply import PlyMaterial
+try:
+    from .ply import PlyMaterial
+except ImportError:
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    from composite_panel.ply import PlyMaterial
 
 
 @dataclass
@@ -562,3 +567,29 @@ def check_laminate(laminate_response: dict,
               f"θ={gov.angle_deg}°)  →  {'FAIL' if gov.failed else 'OK'}")
 
     return results
+
+
+if __name__ == "__main__":
+    import sys as _sys, os as _os
+    _sys.stdout.reconfigure(encoding="utf-8")
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    import numpy as np
+    from composite_panel.ply import Ply, IM7_8552
+    from composite_panel.laminate import Laminate
+
+    mat   = IM7_8552()
+    t_ply = 0.125e-3   # 0.125 mm cured-ply thickness
+
+    # [0/45/-45/90]s quasi-isotropic symmetric laminate (8 plies, h = 1 mm)
+    angles = [0, 45, -45, 90, 90, -45, 45, 0]
+    plies  = [Ply(mat, t_ply, a) for a in angles]
+    lam    = Laminate(plies)
+
+    # Typical upper-skin load state: M=1.7, 2.5g, η=0.5
+    N = np.array([-280e3, -115e3, 42e3])   # N/m
+    M = np.array([   60.0,   0.0,  0.0])   # N·m/m
+    res = lam.response(N=N, M=M)
+
+    print(f"Applied N = [{N[0]/1e3:.0f}, {N[1]/1e3:.0f}, {N[2]/1e3:.0f}] kN/m")
+    for criterion in ["tsai_wu", "tsai_hill", "max_stress", "hashin"]:
+        check_laminate(res, plies, criterion=criterion)

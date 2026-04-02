@@ -180,6 +180,14 @@ class WingGeometry:
     sweep_le_deg : leading-edge sweep [deg]
     t_over_c     : structural box thickness-to-chord ratio
     mtow_n       : max take-off weight [N]  (drives bending moment magnitude)
+    ea_offset    : aerodynamic-centre to elastic-axis offset [fraction of chord].
+                   Positive = AC aft of EA (typical swept wing: 0.10–0.15).
+                   Used by optimize_wing() to add Bredt shear flow from the
+                   spanwise-integrated pitching moment:
+                     m'(y) = delta_p(y) * c(y)^2 * ea_offset
+                     T(y)  = integral_y^{b/2} m'(y') dy'   (tip → root)
+                     Nxy   += T(y) / (2 * A_box(y))
+                   Default 0.0 preserves existing behaviour.
     """
     semi_span:    float
     root_chord:   float
@@ -187,6 +195,7 @@ class WingGeometry:
     sweep_le_deg: float
     t_over_c:     float  = 0.04
     mtow_n:       float  = 150_000.0   # N
+    ea_offset:    float  = 0.0         # AC-to-EA offset [fraction of chord]
 
     def chord(self, eta: float) -> float:
         """Linear taper: c(eta) = c_root * [1 - (1-lambda)*eta]."""
@@ -208,13 +217,16 @@ def wing_panel_loads(
     altitude_m: float,
     alpha_deg: float,
     n_load: float = 2.5,
+    distribution: str = "auto",
 ) -> "PanelLoads":
     """
     Combined running loads at spanwise station eta for the upper wing skin.
 
-    Nxx is derived from the elliptic bending moment (not an empirical ratio
-    of Nyy), capturing the spanwise variation: large near root, zero at tip.
-    Nyy accounts for local chord via the tapered planform.
+    Nxx is derived from the bending moment of the spanwise lift distribution.
+    By default (distribution='auto') a Mach-regime-aware blend is used:
+    Schrenk in subsonic flow, transitioning to chord-proportional (Ackeret
+    strip theory) as the supersonic leading-edge parameter K = M·cos(Λ_LE)
+    exceeds 1.  See spanwise_lift_distribution() for the full derivation.
 
     Load derivation
     ---------------
@@ -225,12 +237,17 @@ def wing_panel_loads(
 
     Parameters
     ----------
-    wing      : WingGeometry
-    eta       : dimensionless spanwise station [0=root, 1=tip]
-    mach      : free-stream Mach (> 1)
-    altitude_m: cruise altitude [m]
-    alpha_deg : angle of attack [deg]
-    n_load    : ultimate load factor
+    wing         : WingGeometry
+    eta          : dimensionless spanwise station [0=root, 1=tip]
+    mach         : free-stream Mach number
+    altitude_m   : cruise altitude [m]
+    alpha_deg    : angle of attack [deg]
+    n_load       : ultimate load factor
+    distribution : spanwise load model
+                   'auto'     – regime-aware Schrenk/strip blend (default)
+                   'elliptic' – classic elliptic (Prandtl lifting-line)
+                   'schrenk'  – Schrenk 50/50 blend regardless of Mach
+                   'strip'    – pure chord-proportional (Ackeret strip)
 
     Returns
     -------
@@ -246,10 +263,19 @@ def wing_panel_loads(
     delta_p = panel_pressure(mach, alpha_deg, q) * n_load
     Nyy = -delta_p * c_loc / 2.0
 
-    # Nxx — skin as wing-box compression flange, loaded by elliptic bending moment
-    l0     = 4.0 * (wing.mtow_n * n_load) / (np.pi * 2.0 * wing.semi_span)
-    M_bend = _elliptic_bending_moment(l0, wing.semi_span, y_loc)
-    Nxx    = -M_bend / (wing.box_height(eta) * c_loc) * wing.sweep_factor()
+    # Nxx — skin as wing-box compression flange, loaded by spanwise bending moment
+    L_total = wing.mtow_n * n_load
+    if distribution == "elliptic":
+        l0     = 4.0 * L_total / (np.pi * 2.0 * wing.semi_span)
+        M_bend = _elliptic_bending_moment(l0, wing.semi_span, y_loc)
+    elif distribution == "schrenk":
+        M_bend = _blended_bending_moment(wing, 0.5, L_total, y_loc)
+    elif distribution == "strip":
+        M_bend = _chord_weighted_bending_moment(wing, L_total, y_loc)
+    else:  # 'auto'
+        M_bend = _blended_bending_moment(wing, mach, L_total, y_loc)
+
+    Nxx = -M_bend / (wing.box_height(eta) * c_loc) * wing.sweep_factor()
 
     # Nxy — torsion + sweep shear
     Nxy = abs(Nxx) * 0.15 + abs(Nyy) * 0.10
@@ -654,7 +680,8 @@ def elliptic_spanwise_load(MTOW_N: float,
     return PanelLoads(Nxx=Nxx, Nyy=Nxx * 0.3, Nxy=abs(Nxx) * 0.15)
 
 
-def _elliptic_bending_moment(l0: float, b: float, y: float) -> float:
+def _elliptic_bending_moment(l0: float, b: float, y: float,
+                              n: int = 500) -> float:
     """
     Bending moment at spanwise station y for an elliptic lift distribution.
 
@@ -671,16 +698,236 @@ def _elliptic_bending_moment(l0: float, b: float, y: float) -> float:
     l0 : float   Root running load intensity [N/m]
     b  : float   Semi-span [m]
     y  : float   Spanwise station [m]
+    n  : int     Quadrature points (default 500)
 
     Returns
     -------
     float  Bending moment [N·m]
     """
-    n  = 500                                         # integration points
-    xi = np.linspace(y, b, n)                        # spanwise coordinates
-    l  = l0 * np.sqrt(np.maximum(1.0 - (xi/b)**2, 0.0))   # running load
-    M  = np.trapezoid(l * (xi - y), xi)                 # moment about station y
-    return M
+    xi = np.linspace(y, b, n)
+    l  = l0 * np.sqrt(np.maximum(1.0 - (xi/b)**2, 0.0))
+    M  = np.trapezoid(l * (xi - y), xi)
+    return float(M)
+
+
+# ---------------------------------------------------------------------------
+# 3.  Realistic (regime-aware) spanwise lift distribution
+# ---------------------------------------------------------------------------
+
+def _distribution_blend_weight(mach: float, sweep_le_deg: float) -> float:
+    """
+    Chord-weighted blend fraction w in [0.5, 1.0] for the spanwise lift
+    distribution.
+
+    The blend interpolates between two limiting distributions:
+
+        l(y) = (1 - w) · l_elliptic(y)  +  w · l_chord(y)
+
+      w = 0.5  →  Schrenk approximation (NACA TM 948, 1940): the standard
+                  preliminary-design method for subsonic swept wings.  Equal
+                  weight to the elliptic (minimum-induced-drag) and the
+                  chord-proportional (geometric) distributions.  Validated
+                  against lifting-surface theory within ~5% for AR > 4,
+                  Λ < 35° (NACA TR 1339, DeYoung & Harper 1948).
+
+      w = 1.0  →  Pure chord-proportional / Ackeret strip theory: the correct
+                  limit for a wing with a fully supersonic leading edge.  Each
+                  spanwise strip is aerodynamically independent; lift is set by
+                  local chord and Ackeret Cp.  Convergence to this limit is
+                  governed by the supersonic-LE Mach parameter K = M·cos(Λ_LE).
+
+    Physics rationale
+    -----------------
+    The Prandtl lifting-line equation contains a kernel that couples spanwise
+    stations via the downwash integral.  In subsonic flow this coupling is
+    global (elliptic influence function), favouring a distribution close to
+    the elliptic optimum.
+
+    In supersonic flow the domain of dependence is bounded by Mach cones.
+    Once the leading edge is supersonic (K = M·cos(Λ_LE) > 1), no spanwise
+    communication propagates upstream of the Mach cone from each leading-edge
+    point: each strip is decoupled and Ackeret strip theory is asymptotically
+    exact (Evvard 1950, NACA Report 951; Jones 1946, NACA TN 1270).
+
+    The ramp K ∈ [0.5, 2.0] covers the transition from a barely-supersonic
+    leading edge (K≈1, significant spanwise influence remains) to a deeply
+    supersonic one (K≥2, strip theory accurate to < 5%).
+
+    Parameters
+    ----------
+    mach         : free-stream Mach number
+    sweep_le_deg : leading-edge sweep angle [deg] measured from span axis
+                   (standard aerospace convention: 0° = unswept)
+
+    Returns
+    -------
+    float  Blend weight w ∈ [0.5, 1.0]
+
+    References
+    ----------
+    Schrenk, O. (1940) "A Simple Approximation Method for Obtaining the
+      Spanwise Lift Distribution," NACA TM 948.
+    Jones, R. T. (1946) "Properties of Low-Aspect-Ratio Pointed Wings at
+      Speeds Below and Above the Speed of Sound," NACA TN 1032.
+    Evvard, J. C. (1950) "Use of Source Distributions for Evaluating
+      Theoretical Aerodynamics of Thin Finite Wings at Supersonic Speeds,"
+      NACA Report 951.
+    """
+    K = mach * np.cos(np.radians(sweep_le_deg))   # normal LE Mach parameter
+    # Supersonic-LE weight: ramps 0 → 1 as K goes from 0.5 to 2.0
+    w_K = float(np.clip((K - 0.5) / 1.5, 0.0, 1.0))
+
+    if mach <= 0.85:
+        return 0.5          # Schrenk throughout subsonic regime
+    elif mach >= 1.15:
+        return 0.5 + 0.5 * w_K   # Schrenk → pure strip for supersonic LE
+    else:
+        # transonic: blend linearly from Schrenk (M=0.85) to supersonic value (M=1.15)
+        t = (mach - 0.85) / 0.30
+        return 0.5 + t * 0.5 * w_K
+
+
+def _chord_weighted_bending_moment(
+    wing: "WingGeometry",
+    L_total: float,
+    y: float,
+    n: int = 500,
+) -> float:
+    """
+    Bending moment at station y for a chord-proportional (strip-theory) load.
+
+    The running load is proportional to local chord c(ξ), normalised so that
+    its integral over the semi-span equals L_total / 2:
+
+        l_chord(ξ) = (L_total / 2) · c(ξ) / S_half
+
+    where S_half = ∫₀^b c(ξ) dξ = c_root · b · (1 + λ) / 2  (trapezoidal wing).
+
+    This is the load predicted by Ackeret strip theory at uniform angle of
+    attack: each strip sees the same Cp = 4α/β, so the lift per unit span
+    is proportional to local chord.  It is also the chord-weighted component
+    used in the Schrenk approximation.
+
+    Unlike the elliptic distribution, this loads the root more heavily for a
+    tapered wing (large root chord) and correctly captures the tip unloading
+    that comes from taper rather than from spanwise flow.
+
+    Parameters
+    ----------
+    wing    : WingGeometry
+    L_total : total lift [N]  (= n_load · MTOW; semi-span integral = L_total/2)
+    y       : spanwise station [m]
+    n       : quadrature points
+
+    Returns
+    -------
+    float  Bending moment [N·m]
+    """
+    b   = wing.semi_span
+    lam = wing.taper_ratio
+    S_half = wing.root_chord * b * (1.0 + lam) / 2.0
+    A = (L_total / 2.0) / S_half   # amplitude [N/m²]
+
+    xi   = np.linspace(y, b, n)
+    c_xi = wing.root_chord * (1.0 - (1.0 - lam) * xi / b)
+    l    = A * c_xi
+    M    = np.trapezoid(l * (xi - y), xi)
+    return float(M)
+
+
+def _blended_bending_moment(
+    wing: "WingGeometry",
+    mach: float,
+    L_total: float,
+    y: float,
+    n: int = 500,
+) -> float:
+    """
+    Bending moment using the regime-aware blended lift distribution.
+
+    For mach passed as a dummy value of 0.5 the function returns the Schrenk
+    bending moment regardless of the wing geometry (useful for the 'schrenk'
+    override in wing_panel_loads).
+
+    Parameters
+    ----------
+    wing    : WingGeometry
+    mach    : free-stream Mach (or 0.5 to force Schrenk)
+    L_total : total lift [N]
+    y       : spanwise station [m]
+    n       : quadrature points
+
+    Returns
+    -------
+    float  Bending moment [N·m]
+    """
+    b  = wing.semi_span
+    l0 = 4.0 * L_total / (np.pi * 2.0 * b)
+    w  = _distribution_blend_weight(mach, wing.sweep_le_deg)
+
+    M_ell   = _elliptic_bending_moment(l0, b, y, n)
+    M_chord = _chord_weighted_bending_moment(wing, L_total, y, n)
+    return (1.0 - w) * M_ell + w * M_chord
+
+
+def spanwise_lift_distribution(
+    wing: "WingGeometry",
+    mach: float,
+    L_total: float,
+    n: int = 200,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """
+    Spanwise running load distribution l(y) [N/m] for the given flight
+    condition, using a Mach-regime-aware blend.
+
+    The blend ranges from Schrenk (subsonic) to pure chord-proportional
+    strip theory (deep supersonic leading edge).  See _distribution_blend_weight
+    for the full physical justification.
+
+    Both limiting distributions are normalised so their semi-span integrals
+    equal L_total / 2:
+        ∫₀^b l(y) dy  ≈  L_total / 2
+
+    This function is primarily for visualisation and verification; the
+    structural sizing path uses _blended_bending_moment directly.
+
+    Parameters
+    ----------
+    wing    : WingGeometry
+    mach    : free-stream Mach number
+    L_total : total ultimate lift [N]  (= n_load · MTOW)
+    n       : number of spanwise stations
+
+    Returns
+    -------
+    y : ndarray  spanwise positions [m], shape (n,)
+    l : ndarray  running load [N/m],     shape (n,)
+
+    Example
+    -------
+    >>> y, l = spanwise_lift_distribution(wing, mach=2.0, L_total=375000)
+    >>> import matplotlib.pyplot as plt
+    >>> plt.plot(y / wing.semi_span, l / l[0], label=f'M={mach}')
+    """
+    b   = wing.semi_span
+    lam = wing.taper_ratio
+    l0  = 4.0 * L_total / (np.pi * 2.0 * b)
+
+    y_arr = np.linspace(0.0, b, n)
+
+    # Elliptic component
+    l_ell = l0 * np.sqrt(np.maximum(1.0 - (y_arr / b) ** 2, 0.0))
+
+    # Chord-proportional component (same semi-span integral as elliptic)
+    S_half = wing.root_chord * b * (1.0 + lam) / 2.0
+    A      = (L_total / 2.0) / S_half
+    c_y    = wing.root_chord * (1.0 - (1.0 - lam) * y_arr / b)
+    l_chord = A * c_y
+
+    w     = _distribution_blend_weight(mach, wing.sweep_le_deg)
+    l_arr = (1.0 - w) * l_ell + w * l_chord
+
+    return y_arr, l_arr
 
 
 # ---------------------------------------------------------------------------
@@ -735,3 +982,48 @@ def _isa(altitude_m: float):
     rho = P / (R * T)           # ideal gas law [kg/m³]
     a   = np.sqrt(gamma * R * T)  # speed of sound [m/s]
     return rho, a
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.stdout.reconfigure(encoding="utf-8")
+    # Single-panel Ackeret loads: M=1.7, 15 km, α=3.5°, 2.5g, 150 mm chord
+    loads = supersonic_panel_loads(
+        mach=1.7, altitude_m=15_000.0, alpha_deg=3.5,
+        panel_chord=0.15, panel_span=0.50, n_load=2.5,
+    )
+    print("Ackeret panel loads  (M=1.7, alt=15 km, α=3.5°, 2.5g, chord=150 mm):")
+    print(f"  {loads}")
+    print(f"  Mxx = {loads.Mxx:.2f} N·m/m")
+    print()
+
+    # Full wing planform
+    wing = WingGeometry(
+        semi_span    = 4.5,
+        root_chord   = 2.0,
+        taper_ratio  = 0.3,
+        sweep_le_deg = 45.0,
+        t_over_c     = 0.04,
+        mtow_n       = 150_000.0,
+    )
+
+    # Wing panel loads at three spanwise stations
+    print(f"Wing panel loads  (M=1.7, alt=15 km, α=3.5°, 2.5g):")
+    print(f"  {'η':>5}  {'Nxx (kN/m)':>12}  {'Nyy (kN/m)':>12}  {'Nxy (kN/m)':>12}  {'Mxx (N·m/m)':>13}")
+    for eta in [0.1, 0.4, 0.7]:
+        wl = wing_panel_loads(wing, eta, mach=1.7, altitude_m=15_000.0,
+                              alpha_deg=3.5, n_load=2.5)
+        print(f"  {eta:5.2f}  {wl.Nxx/1e3:12.1f}  {wl.Nyy/1e3:12.1f}  "
+              f"{wl.Nxy/1e3:12.1f}  {wl.Mxx:13.1f}")
+    print()
+
+    # Unified pressure model across Mach range
+    rho, a_snd = _isa(15_000.0)
+    q15 = 0.5 * rho * (a_snd * 1.7) ** 2
+    print("Unified panel pressure  (alt=15 km, α=5°, q=computed):")
+    print(f"  {'M':>5}  {'Δp (kPa)':>12}")
+    for M in [0.5, 0.8, 1.2, 1.7, 2.5, 5.0]:
+        rho_m, a_m = _isa(15_000.0)
+        q_m = 0.5 * rho_m * (a_m * M) ** 2
+        dp  = panel_pressure(M, 5.0, q_m)
+        print(f"  {M:5.1f}  {dp/1e3:12.3f}")

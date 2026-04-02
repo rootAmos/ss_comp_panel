@@ -425,3 +425,25 @@ def T300_5208() -> PlyMaterial:
         F12  =    68e6,   # Pa
         name = "T300/5208",
     )
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.stdout.reconfigure(encoding="utf-8")
+    mat = IM7_8552()
+    print(f"Material: {mat.name}")
+    print(f"  E1={mat.E1/1e9:.1f} GPa,  E2={mat.E2/1e9:.2f} GPa,  "
+          f"G12={mat.G12/1e9:.2f} GPa,  nu12={mat.nu12}")
+    print(f"  F1t={mat.F1t/1e6:.0f} MPa,  F1c={mat.F1c/1e6:.0f} MPa,  "
+          f"F2t={mat.F2t/1e6:.0f} MPa,  F2c={mat.F2c/1e6:.0f} MPa,  "
+          f"F12={mat.F12/1e6:.0f} MPa")
+    print()
+
+    cpt = 0.125e-3  # 0.125 mm cured-ply thickness — standard IM7/8552 prepreg
+
+    for angle in [0, 45, 90]:
+        ply = Ply(mat, thickness=cpt, angle_deg=angle)
+        print(f"Ply at θ={angle:3d}°  Q_bar [GPa]:")
+        for row in ply.Q_bar / 1e9:
+            print("  " + "  ".join(f"{v:8.3f}" for v in row))
+        print()

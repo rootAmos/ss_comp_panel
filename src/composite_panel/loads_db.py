@@ -405,3 +405,36 @@ class LoadsDatabase:
 
     def print_summary(self) -> None:
         print(self.summary())
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.stdout.reconfigure(encoding="utf-8")
+    # Representative flight envelope for a supersonic wing skin at η=0.5
+    records = [
+        {"name": "M1.4_1g_mid",   "Nxx": -120e3, "Nyy":  -50e3, "Nxy": 18e3,
+         "Mxx": 25.0, "source": "Ackeret", "eta": 0.5,
+         "description": "M1.4 cruise 1g"},
+        {"name": "M1.7_2.5g_mid", "Nxx": -280e3, "Nyy": -115e3, "Nxy": 42e3,
+         "Mxx": 60.0, "source": "Ackeret", "eta": 0.5,
+         "description": "M1.7 manoeuvre 2.5g"},
+        {"name": "M2.0_1g_mid",   "Nxx": -160e3, "Nyy":  -65e3, "Nxy": 24e3,
+         "Mxx": 32.0, "source": "Ackeret", "eta": 0.5,
+         "description": "M2.0 cruise 1g"},
+        {"name": "M2.0_2.5g_mid", "Nxx": -400e3, "Nyy": -160e3, "Nxy": 60e3,
+         "Mxx": 80.0, "source": "Ackeret", "eta": 0.5,
+         "description": "M2.0 manoeuvre 2.5g"},
+    ]
+
+    db = LoadsDatabase.from_dict(records)
+    print(db.summary())
+    print()
+
+    env = db.envelope_case()
+    print(f"Envelope:  Nxx={env.Nxx/1e3:.0f} kN/m,  "
+          f"Nyy={env.Nyy/1e3:.0f} kN/m,  Nxy={env.Nxy/1e3:.0f} kN/m")
+    print()
+
+    # Scale by an additional 1.5 safety factor and show first case
+    case = db[1].scaled(1.5)
+    print(f"Scaled case: {case}")

@@ -68,7 +68,12 @@ import numpy as _np
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Union
 
-from .ply import PlyMaterial, Ply
+try:
+    from .ply import PlyMaterial, Ply
+except ImportError:
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    from composite_panel.ply import PlyMaterial, Ply
 
 
 # ---------------------------------------------------------------------------
@@ -446,3 +451,50 @@ def thermal_state_from_flight(
         T_wall_inner = T_inner,
         T_cure       = T_cure,
     )
+
+
+if __name__ == "__main__":
+    import sys as _sys, os as _os
+    _sys.stdout.reconfigure(encoding="utf-8")
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    import numpy as np
+    from composite_panel.ply import Ply, IM7_8552
+
+    mach, alt = 2.5, 15_000.0   # M=2.5 at 15 km cruise
+
+    T_aw = aero_wall_temperature(mach, alt)
+    print(f"M={mach} at {alt/1e3:.0f} km:")
+    print(f"  Adiabatic wall temperature  T_aw     = {T_aw:.1f} K  ({T_aw-273.15:.1f} °C)")
+
+    T_eq = equilibrium_wall_temperature(mach, alt, x_station=0.5)
+    print(f"  Radiation-equilibrium T_wall          = {T_eq:.1f} K  ({T_eq-273.15:.1f} °C)")
+
+    q = aero_heat_flux(mach, alt, x_station=0.5, T_wall=T_eq)
+    print(f"  Heat flux at x=0.5 m (equil. T_wall) = {q:.0f} W/m²")
+    print()
+
+    # Thermal load resultants for a [0/45/-45/90]s 8-ply IM7/8552 laminate
+    mat        = IM7_8552()
+    t_ply      = 0.125e-3
+    angles     = [0, 45, -45, 90, 90, -45, 45, 0]
+    plies      = [Ply(mat, t_ply, a) for a in angles]
+    pt         = IM7_8552_thermal()
+    ply_thermals = [pt] * len(plies)
+
+    # z-interfaces for equal-thickness-ply laminate
+    h = len(plies) * t_ply
+    z_interfaces = np.linspace(-h / 2, h / 2, len(plies) + 1)
+
+    # 40 °C temperature drop across 1 mm skin thickness
+    ts = ThermalState(T_wall_outer=T_eq, T_wall_inner=T_eq - 40.0, T_cure=pt.T_cure)
+    N_T, M_T = thermal_resultants(plies, ply_thermals, ts, z_interfaces)
+
+    print(f"Thermal resultants for [0/45/-45/90]s at M={mach}, alt={alt/1e3:.0f}km:")
+    print(f"  N_T [N/m]    : Nx={N_T[0]:.0f},  Ny={N_T[1]:.0f},  Nxy={N_T[2]:.0f}")
+    print(f"  M_T [N·m/m]  : Mx={M_T[0]:.3f},  My={M_T[1]:.3f},  Mxy={M_T[2]:.3f}")
+
+    # Laminate-level CTE
+    from composite_panel.laminate import Laminate
+    lam   = Laminate(plies)
+    alpha = lam.alpha_lam(ply_thermals)
+    print(f"  Laminate CTE : αx={alpha[0]*1e6:.2f} µ/K,  αy={alpha[1]*1e6:.2f} µ/K,  αxy={alpha[2]*1e6:.2f} µ/K")

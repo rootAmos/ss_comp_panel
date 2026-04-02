@@ -22,22 +22,42 @@ import numpy as _np                 # standard numpy for constants
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Union
 
-from .ply import PlyMaterial, Ply, IM7_8552
-from .laminate import Laminate
-from .failure import check_laminate
-from .aero_loads import (
-    supersonic_panel_loads, WingGeometry, wing_panel_loads,
-)
-from .loads_db import LoadCase, LoadsDatabase
-from .thermal import (
-    PlyThermal, ThermalState, IM7_8552_thermal,
-    alpha_bar as _alpha_bar, thermal_resultants as _thermal_resultants,
-)
-from .buckling import (
-    buckling_rf_smooth as _buckling_rf_smooth,
-    buckling_rf        as _buckling_rf,
-    Nxx_cr_smooth, suggest_mode_number,
-)
+try:
+    from .ply import PlyMaterial, Ply, IM7_8552
+    from .laminate import Laminate
+    from .failure import check_laminate
+    from .aero_loads import (
+        supersonic_panel_loads, WingGeometry, wing_panel_loads, PanelLoads,
+    )
+    from .loads_db import LoadCase, LoadsDatabase
+    from .thermal import (
+        PlyThermal, ThermalState, IM7_8552_thermal,
+        alpha_bar as _alpha_bar, thermal_resultants as _thermal_resultants,
+    )
+    from .buckling import (
+        buckling_rf_smooth as _buckling_rf_smooth,
+        buckling_rf        as _buckling_rf,
+        Nxx_cr_smooth, suggest_mode_number,
+    )
+except ImportError:
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    from composite_panel.ply import PlyMaterial, Ply, IM7_8552
+    from composite_panel.laminate import Laminate
+    from composite_panel.failure import check_laminate
+    from composite_panel.aero_loads import (
+        supersonic_panel_loads, WingGeometry, wing_panel_loads, PanelLoads,
+    )
+    from composite_panel.loads_db import LoadCase, LoadsDatabase
+    from composite_panel.thermal import (
+        PlyThermal, ThermalState, IM7_8552_thermal,
+        alpha_bar as _alpha_bar, thermal_resultants as _thermal_resultants,
+    )
+    from composite_panel.buckling import (
+        buckling_rf_smooth as _buckling_rf_smooth,
+        buckling_rf        as _buckling_rf,
+        Nxx_cr_smooth, suggest_mode_number,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -831,14 +851,42 @@ def optimize_wing(
     -------
     WingOptimizationResult
     """
-    etas       = _np.linspace(0.05, 0.95, n_stations)
-    loads_list = []
-    opt_list   = []
+    etas = _np.linspace(0.05, 0.95, n_stations)
+
+    # ── Pass 1: aerodynamic loads at every station ──────────────────────────
+    loads_list = [
+        wing_panel_loads(wing, eta, mach, altitude_m, alpha_deg, n_load)
+        for eta in etas
+    ]
+
+    # ── Torsion pre-pass (Bredt–Batho shear flow from AC/EA offset) ─────────
+    # Pitching moment per unit span: m'(y) = delta_p(y) * c(y)^2 * ea_offset
+    # delta_p recoverd from Nyy = -delta_p * c/2  →  delta_p = -2*Nyy/c
+    # Torque: T(y) = ∫_y^{b/2} m'(y') dy'  (cumulative sum from tip inward)
+    # Enclosed box area: A_box ≈ 0.5 * t/c * c²  (height=t/c*c, width≈c/2)
+    # Shear flow: Nxy_torsion = T / (2 * A_box)
+    if wing.ea_offset != 0.0:
+        y_arr   = etas * wing.semi_span
+        m_prime = _np.array([
+            (-2.0 * loads_list[i].Nyy / wing.chord(etas[i]))
+            * wing.chord(etas[i]) ** 2 * wing.ea_offset
+            for i in range(n_stations)
+        ])
+        T = _np.zeros(n_stations)
+        for i in range(n_stations - 2, -1, -1):
+            T[i] = T[i + 1] + 0.5 * (m_prime[i] + m_prime[i + 1]) * (y_arr[i + 1] - y_arr[i])
+        for i in range(n_stations):
+            c_i   = wing.chord(etas[i])
+            A_box = 0.5 * wing.t_over_c * c_i ** 2
+            loads_list[i].Nxy += T[i] / (2.0 * A_box)
+
+    # ── Pass 2: optimize laminate at each station ────────────────────────────
+    opt_list = []
 
     print(f"  Sizing {n_stations} spanwise stations — RF >= {rf_min}  t_min = {t_min*1e3:.2f} mm")
 
     for i, eta in enumerate(etas):
-        panel_loads = wing_panel_loads(wing, eta, mach, altitude_m, alpha_deg, n_load)
+        panel_loads = loads_list[i]
         ts = thermal_states[i] if thermal_states is not None else None
 
         result = optimize_laminate(
@@ -861,7 +909,6 @@ def optimize_wing(
             verbose          = False,
         )
 
-        loads_list.append(panel_loads)
         opt_list.append(result)
 
         bar  = "#" * (i + 1) + "." * (n_stations - i - 1)

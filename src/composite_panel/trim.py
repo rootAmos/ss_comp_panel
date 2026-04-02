@@ -20,7 +20,12 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-from .aero_loads import WingGeometry, _isa as isa_atmosphere
+try:
+    from .aero_loads import WingGeometry, _isa as isa_atmosphere
+except ImportError:
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    from composite_panel.aero_loads import WingGeometry, _isa as isa_atmosphere
 
 
 
@@ -199,3 +204,39 @@ def trim_table(wing: WingGeometry,
     ...     print(s)
     """
     return [trim_alpha(wing, M, altitude_m, n_load) for M in mach_range]
+
+
+if __name__ == "__main__":
+    import sys as _sys, os as _os
+    _sys.stdout.reconfigure(encoding="utf-8")
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    from composite_panel.aero_loads import WingGeometry
+
+    wing = WingGeometry(
+        semi_span    = 4.5,
+        root_chord   = 2.0,
+        taper_ratio  = 0.3,
+        sweep_le_deg = 45.0,
+        t_over_c     = 0.04,
+        mtow_n       = 150_000.0,
+    )
+
+    # Single-point trim: 1g cruise at M=1.7, 15 km
+    state = trim_alpha(wing, mach=1.7, altitude_m=15_000.0, n_load=1.0)
+    print("1g cruise trim  (M=1.7, 15 km):")
+    print(f"  {state}")
+    print()
+
+    # 2.5g manoeuvre trim at the same condition
+    state_man = trim_alpha(wing, mach=1.7, altitude_m=15_000.0, n_load=2.5)
+    print("2.5g manoeuvre trim  (M=1.7, 15 km):")
+    print(f"  {state_man}")
+    print()
+
+    # Sweep across mission profile
+    mach_range = [0.6, 0.8, 1.2, 1.5, 1.7, 2.0, 2.5]
+    print("Trim table — 15 km, 1g cruise:")
+    print(f"  {'M':>5}  {'α (°)':>8}  {'CL':>8}  {'CLα (1/rad)':>12}  {'q∞ (kPa)':>10}")
+    for s in trim_table(wing, mach_range, altitude_m=15_000.0, n_load=1.0):
+        print(f"  {s.mach:5.2f}  {s.alpha_deg:8.3f}  {s.CL:8.4f}  "
+              f"{s.CLalpha:12.4f}  {s.q_inf/1e3:10.2f}")

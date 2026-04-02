@@ -73,7 +73,12 @@ from __future__ import annotations
 import numpy as np
 from typing import List, Optional
 
-from .ply import Ply
+try:
+    from .ply import Ply
+except ImportError:
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    from composite_panel.ply import Ply
 
 
 class Laminate:
@@ -469,3 +474,38 @@ class Laminate:
     def __repr__(self) -> str:
         stack = "/".join(str(int(p.angle_deg)) for p in self.plies)
         return f"Laminate([{stack}], h={self._h*1e3:.3f} mm)"
+
+
+if __name__ == "__main__":
+    import sys as _sys, os as _os
+    _sys.stdout.reconfigure(encoding="utf-8")
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    import numpy as np
+    from composite_panel.ply import Ply, IM7_8552
+
+    mat   = IM7_8552()
+    t_ply = 0.125e-3   # 0.125 mm cured-ply thickness
+
+    # [0/45/-45/90]s — quasi-isotropic symmetric laminate (8 plies, h = 1 mm)
+    angles = [0, 45, -45, 90, 90, -45, 45, 0]
+    plies  = [Ply(mat, t_ply, a) for a in angles]
+    lam    = Laminate(plies)
+
+    print(lam.summary())
+    print()
+    print(f"Effective moduli:")
+    print(f"  Ex  = {lam.Ex/1e9:.2f} GPa")
+    print(f"  Ey  = {lam.Ey/1e9:.2f} GPa")
+    print(f"  Gxy = {lam.Gxy/1e9:.2f} GPa")
+    print()
+
+    # Typical upper-skin load state: spanwise + chordwise compression, shear, pressure bending
+    N = np.array([-280e3, -115e3, 42e3])   # [Nxx, Nyy, Nxy]  N/m
+    M = np.array([   60.0,   0.0,  0.0])   # [Mxx, Myy, Mxy]  N·m/m
+
+    res = lam.response(N=N, M=M)
+    eps0 = res['eps0']
+    print(f"Applied N = [{N[0]/1e3:.0f}, {N[1]/1e3:.0f}, {N[2]/1e3:.0f}] kN/m  "
+          f"M = [{M[0]:.0f}, {M[1]:.0f}, {M[2]:.0f}] N·m/m")
+    print(f"Midplane strains (µε):  εx={eps0[0]*1e6:.1f},  εy={eps0[1]*1e6:.1f},  "
+          f"γxy={eps0[2]*1e6:.1f}")

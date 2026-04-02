@@ -369,3 +369,36 @@ def suggest_mode_number(a: float, b: float, D: _np.ndarray) -> int:
     r = m * b / a
     N = D11 * r**2 + two_D + D22 / r**2
     return int(m[_np.argmin(N)])
+
+
+if __name__ == "__main__":
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+    from composite_panel.ply import Ply, IM7_8552
+    from composite_panel.laminate import Laminate
+
+    mat   = IM7_8552()
+    t_ply = 0.125e-3   # 0.125 mm cured-ply thickness
+
+    # [0/45/-45/90]s quasi-isotropic symmetric laminate (8 plies, h = 1 mm)
+    angles = [0, 45, -45, 90, 90, -45, 45, 0]
+    plies  = [Ply(mat, t_ply, a) for a in angles]
+    lam    = Laminate(plies)
+    D      = lam.D
+
+    # Rib/stringer bay: 0.5 m spanwise, 0.15 m chordwise
+    a, b = 0.5, 0.15
+
+    print(f"Panel {a:.2f} m (span) x {b:.2f} m (chord),  h = {lam.thickness*1e3:.2f} mm")
+    print(f"  Nxx_cr = {Nxx_cr(D, a, b)/1e3:.1f} kN/m")
+    print(f"  Nyy_cr = {Nyy_cr(D, a, b)/1e3:.1f} kN/m")
+    print(f"  Nxy_cr = {Nxy_cr(D, a, b)/1e3:.1f} kN/m")
+    print(f"  Suggested mode m* = {suggest_mode_number(a, b, D)}")
+    print()
+
+    # Applied loads: upper-skin compression + shear
+    N_applied = _np.array([-280e3, -115e3, 42e3])  # [Nxx, Nyy, Nxy] N/m
+    rf = buckling_rf(N_applied, D, a, b)
+    print(f"Applied: Nxx={N_applied[0]/1e3:.0f}, Nyy={N_applied[1]/1e3:.0f}, "
+          f"Nxy={N_applied[2]/1e3:.0f} kN/m")
+    print(f"Buckling RF = {rf:.3f}  ({'OK' if rf >= 1.0 else 'BUCKLED'})")
