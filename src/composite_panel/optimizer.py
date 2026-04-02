@@ -283,6 +283,7 @@ def optimize_laminate(
     balance_pairs:    Optional[List[Tuple[int,int]]] = None,
     optimize_angles:  bool  = False,
     angle_bounds_deg: Optional[List[Tuple[float,float]]] = None,
+    allow_unbalanced: bool  = False,
     # -- thermal -----------------------------------------------------------------
     thermal_state:    Optional[ThermalState]  = None,
     ply_thermal:      Optional[PlyThermal]    = None,
@@ -308,10 +309,17 @@ def optimize_laminate(
     t_init           : initial guess for each ply thickness [m]
     balance_pairs    : list of (i, j) pairs to enforce t_i = t_j.
                        When optimize_angles=True, also enforces theta_j = -theta_i.
+                       Ignored when allow_unbalanced=True.
     optimize_angles  : if True, fibre angles become CasADi design variables
     angle_bounds_deg : per-ply angle bounds [(lo, hi), ...].
                        Use (x, x) to fix a ply at angle x degrees.
                        Defaults to (-90, 90) for all plies if None.
+    allow_unbalanced : if True, balance constraints (t_i = t_j and theta_j = -theta_i)
+                       are NOT enforced, allowing A16/A26 ≠ 0 and D16/D26 ≠ 0.
+                       This enables aeroelastic tailoring via bend-twist coupling.
+                       The symmetric layup (B = 0) is still enforced by construction.
+                       WARNING: unbalanced laminates exhibit shear-extension coupling
+                       which may cause unexpected in-plane shear under axial loads.
     verbose          : pass through to IPOPT output
 
     Returns
@@ -361,15 +369,15 @@ def optimize_laminate(
                               lower_bound=lo, upper_bound=hi)
         theta_list = [theta[k] for k in range(n_half)]
 
-        # Balance: theta_j = -theta_i
-        if balance_pairs is not None:
+        # Balance: theta_j = -theta_i  (skipped for unbalanced aeroelastic tailoring)
+        if balance_pairs is not None and not allow_unbalanced:
             for (i, j) in balance_pairs:
                 opti.subject_to(theta_list[j] == -theta_list[i])
     else:
         theta_list = [_np.radians(a) for a in angles_half_deg]
 
-    # Balance: t_i = t_j
-    if balance_pairs is not None:
+    # Balance: t_i = t_j  (skipped for unbalanced aeroelastic tailoring)
+    if balance_pairs is not None and not allow_unbalanced:
         for (i, j) in balance_pairs:
             opti.subject_to(t_list[i] == t_list[j])
 

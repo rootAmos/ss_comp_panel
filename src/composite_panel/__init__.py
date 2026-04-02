@@ -43,7 +43,17 @@ from .optimizer   import (
 )
 from .trim        import TrimState, trim_alpha, trim_table, lift_curve_slope
 from .aeroelastic import (AeroelasticResult, static_aeroelastic,
-                           wing_bending_stiffness)
+                           wing_bending_stiffness, wing_torsional_stiffness,
+                           wing_coupling_stiffness)
+from .lamination_parameters import (
+    material_invariants,
+    lamination_parameters,
+    abd_from_lamination_params,
+    stiffness_polar,
+    plot_lp_feasibility,
+    bend_twist_coupling_index,
+    shear_extension_coupling_index,
+)
 
 __all__ = [
     # ply / laminate
@@ -74,7 +84,12 @@ __all__ = [
     # trim / flight dynamics
     "TrimState", "trim_alpha", "trim_table", "lift_curve_slope",
     # aeroelastic
-    "AeroelasticResult", "static_aeroelastic", "wing_bending_stiffness",
+    "AeroelasticResult", "static_aeroelastic",
+    "wing_bending_stiffness", "wing_torsional_stiffness", "wing_coupling_stiffness",
+    # lamination parameters
+    "material_invariants", "lamination_parameters", "abd_from_lamination_params",
+    "stiffness_polar", "plot_lp_feasibility",
+    "bend_twist_coupling_index", "shear_extension_coupling_index",
 ]
 
 __version__ = "0.1.0"
