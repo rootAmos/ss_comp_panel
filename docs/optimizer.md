@@ -149,6 +149,122 @@ optimize_laminate() or optimize_laminate_multicase()
 
 ---
 
+## Aeroelastic tailoring
+
+`optimize_laminate_aeroelastic()` extends the base NLP with a **CasADi-native
+aeroelastic washout constraint** — no inner loop, no finite-difference
+perturbation:
+
+```
+min   ρ · 2 · Σ tₖ
+ t,θ
+s.t.  RF_k(t,θ) ≥ rf_min         ∀ ply k    (Tsai-Wu strength)
+      RF_buckle(t) ≥ 1            (if panel dims given)
+      Δα_tip [deg] ≤ −relief_min             (aeroelastic washout)
+      tₖ ≥ t_min
+      θₖ ∈ [θ_lo, θ_hi]          (if use_bt_coupling=True)
+```
+
+When `use_bt_coupling=True`, ply angles become additional design variables and
+balance constraints are lifted, allowing D16 ≠ 0.
+
+### Aeroelastic constraint derivation
+
+Wing-box stiffnesses are expressed directly from the CasADi A/D matrices:
+
+```
+E_eff = A₁₁ / h_total            [Pa]
+EI    = 2 · E_eff · b_box · (h_box/2)²   [N·m²]   (bending)
+GJ    = 4 · D₆₆ · b_box                  [N·m²]   (torsional)
+EK    = 2 · D₁₆ · b_box                  [N·m²]   (bend-twist coupling)
+```
+
+Tip slope (elliptic lift distribution, exact closed-form):
+
+```
+θ_tip = W_semi · L² / (8 · EI)            [rad]
+```
+
+The factor 1/8 comes from integrating q(y) = q₀√(1−(y/L)²) through the
+Euler-Bernoulli cantilever:
+
+```
+θ_tip = (1/EI) ∫₀ᴸ ∫_y^L q(s)(s−y) ds dy  =  q₀ · L³ · π / (32 · EI)
+```
+
+with q₀ = 4W/(πL).
+
+Total tip washout (sweep geometry + bend-twist coupling):
+
+```
+Δα_tip = −θ_tip · (tan Λ + EK/GJ)         [rad]
+```
+
+All three stiffnesses (EI, GJ, EK) are differentiable with respect to ply
+thicknesses `t` (through A₁₁ and D₆₆) and ply angles `θ` (through D₁₆ and
+the Q̄-invariant form). IPOPT therefore receives exact Jacobians for the
+aeroelastic constraint from CasADi's AD — the same as for Tsai-Wu and buckling.
+
+### Physical interpretation
+
+| Laminate type | D₁₆ | Washout mechanism |
+|---|---|---|
+| Balanced `[0/±45/90]s` | 0 | Geometric only — sweep + EI compliance |
+| Unbalanced (free angles) | ≠ 0 | Sweep + EK/GJ augmentation |
+
+For a swept-back wing, EK > 0 (positive D₁₆) **augments** the geometric
+washout. The optimizer can therefore achieve the required Δα_tip at **higher**
+EI (thicker, stronger panels) than the geometry-only case, reducing the mass
+penalty from the aeroelastic constraint.
+
+The `demo_aeroelastic_tailoring.py` script shows the three-case comparison:
+strength-only baseline (+0%), geometry washout (+33%), bend-twist coupled (+18%).
+
+### Data flow
+
+```
+Flight condition + WingGeometry
+         │
+         ▼
+optimize_laminate_aeroelastic(N, M, mat, angles, wing, n_load, relief_min)
+         │
+         ├─ Tsai-Wu constraints          (same as optimize_laminate)
+         ├─ Buckling constraint          (same as optimize_laminate)
+         │
+         ├─ A₁₁, D₁₆, D₆₆  ← _build_ABD_symmetric(t, Q_bar(θ))  [CasADi]
+         ├─ EI, GJ, EK      ← stiffness expressions               [CasADi]
+         ├─ θ_tip           ← W_semi·L²/(8·EI)                    [CasADi]
+         └─ Δα_tip ≤ −relief_min                                   [CasADi]
+                  │
+                  └─ opti.solve()  →  AeroelasticOptimizationResult
+```
+
+---
+
+## Sensitivity analysis
+
+The parametric sensitivity of optimal mass to any flight parameter is available
+analytically from the solved KKT conditions — one solve yields N sensitivities:
+
+```
+d(m*)/d(n_load)  — load factor sensitivity
+d(m*)/d(Mach)    — Mach sensitivity
+```
+
+`demo_sensitivity.py` builds explicit sweep curves across n_load ∈ [1.5, 4.0]g
+and Mach ∈ [1.4, 4.0] and annotates the slope at the nominal design point.
+Normalised log-log sensitivities at the nominal point (n=2.5g, M=2.4, Alt=25.9km):
+
+| Parameter | ∂(ln m*)/∂(ln p) | Interpretation |
+|---|---|---|
+| n_load | 0.40 | Doubling load factor → +33% mass |
+| Mach | 0.16 | Doubling Mach → +12% mass |
+
+Load factor dominates; Mach matters primarily above M3.5 where dynamic
+pressure growth accelerates.
+
+---
+
 ## References
 
 | | |

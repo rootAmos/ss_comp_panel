@@ -39,7 +39,9 @@ from .loads_db    import LoadCase, LoadsDatabase
 from .optimizer   import (
     optimize_laminate, optimize_laminate_multicase,
     optimize_wing, pareto_sweep, detect_balance_pairs,
+    optimize_laminate_aeroelastic,
     OptimizationResult, MulticaseOptimizationResult, WingOptimizationResult,
+    AeroelasticOptimizationResult,
 )
 from .trim        import TrimState, trim_alpha, trim_table, lift_curve_slope
 from .aeroelastic import (AeroelasticResult, static_aeroelastic,
@@ -80,7 +82,9 @@ __all__ = [
     # optimizer
     "optimize_laminate", "optimize_laminate_multicase",
     "optimize_wing", "pareto_sweep", "detect_balance_pairs",
+    "optimize_laminate_aeroelastic",
     "OptimizationResult", "MulticaseOptimizationResult", "WingOptimizationResult",
+    "AeroelasticOptimizationResult",
     # trim / flight dynamics
     "TrimState", "trim_alpha", "trim_table", "lift_curve_slope",
     # aeroelastic

@@ -937,6 +937,319 @@ def optimize_wing(
 
 
 # ---------------------------------------------------------------------------
+# Aeroelastic tailoring optimiser
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AeroelasticOptimizationResult:
+    """
+    Outcome of a laminate optimisation with an embedded aeroelastic constraint.
+
+    The constraint enforces that tip washout (Δα_tip) satisfies:
+
+        Δα_tip <= -|relief_min_deg|   (nose-down, load-relieving)
+
+    where Δα_tip is computed from the simplified coupled-beam model:
+
+        θ_tip    = W_semi · L² / (8 · EI)          [elliptic lift distribution]
+        Δα_tip   = −θ_tip · (tan Λ  +  EK / GJ)     [sweep + bend-twist coupling]
+
+    EI, GJ, EK are derived directly from the CasADi A and D matrices, so the
+    constraint is differentiable end-to-end and participates fully in the
+    IPOPT solve.
+
+    Attributes
+    ----------
+    base                : OptimizationResult — thicknesses, RF, areal density
+    achieved_washout_deg: float — actual Δα_tip at optimum [deg]  (<0 = washout)
+    relief_min_target   : float — required |washout| [deg]
+    D16                 : float — laminate D[0,2] at optimum [N·m]
+    D66                 : float — laminate D[2,2] at optimum [N·m]
+    EI_root             : float — root bending stiffness [N·m²]
+    GJ_root             : float — root torsional stiffness [N·m²]
+    EK_root             : float — root bend-twist coupling stiffness [N·m²]
+    bt_ratio_root       : float — EK/GJ — dimensionless coupling efficiency
+    """
+    base:                 OptimizationResult
+    achieved_washout_deg: float
+    relief_min_target:    float
+    D16:                  float
+    D66:                  float
+    EI_root:              float
+    GJ_root:              float
+    EK_root:              float
+    bt_ratio_root:        float
+
+    @property
+    def total_h(self):        return self.base.total_h
+    @property
+    def areal_density(self):  return self.base.areal_density
+    @property
+    def min_tsai_wu_rf(self): return self.base.min_tsai_wu_rf
+    @property
+    def converged(self):      return self.base.converged
+    @property
+    def t_half(self):         return self.base.t_half
+    @property
+    def t_full(self):         return self.base.t_full
+    @property
+    def angles_half(self):    return self.base.angles_half
+
+    def summary(self) -> str:
+        lines = [
+            self.base.summary(),
+            "  Aeroelastic tailoring",
+            f"    washout target   : <= {-abs(self.relief_min_target):.3f}°  (nose-down)",
+            f"    washout achieved : {self.achieved_washout_deg:+.4f}°",
+            f"    D16              : {self.D16:.4f} N·m",
+            f"    D66              : {self.D66:.4f} N·m",
+            f"    EK/GJ (root)     : {self.bt_ratio_root:.5f}",
+            f"    EI root          : {self.EI_root:.3e} N·m²",
+        ]
+        return "\n".join(lines)
+
+
+def optimize_laminate_aeroelastic(
+    N_loads:          _np.ndarray,
+    M_loads:          _np.ndarray,
+    mat:              PlyMaterial,
+    angles_half_deg:  List[float],
+    wing:             "WingGeometry",
+    n_load:           float,
+    relief_min_deg:   float,
+    use_bt_coupling:  bool  = True,
+    box_fraction:     float = 0.50,
+    rho_kg_m3:        float = 1600.0,
+    rf_min:           float = 1.5,
+    t_min:            float = 0.05e-3,
+    t_init:           float = 0.125e-3,
+    angle_bounds_deg: Optional[List[Tuple[float,float]]] = None,
+    panel_a:          Optional[float] = None,
+    panel_b:          Optional[float] = None,
+    buckle_rf_min:    float = 1.0,
+    thermal_state:    Optional[ThermalState]  = None,
+    ply_thermal:      Optional[PlyThermal]    = None,
+    verbose:          bool  = True,
+) -> AeroelasticOptimizationResult:
+    """
+    Minimum-mass laminate with an embedded CasADi aeroelastic washout constraint.
+
+    Adds to the standard Tsai-Wu + buckling constraints:
+
+        Δα_tip [deg] <= −|relief_min_deg|
+
+    where Δα_tip is computed analytically from the CasADi A/D matrices:
+
+        EI   = 2 · (A11/h) · b_box · (h_box/2)²
+        GJ   = 4 · D66 · b_box
+        EK   = 2 · D16 · b_box
+        θ_tip = W_semi · L² / (8 · EI)          (elliptic lift, exact integral)
+        Δα    = −θ_tip · (tan Λ + EK/GJ)
+
+    All three stiffnesses are differentiable wrt ply thicknesses and angles, so
+    the aeroelastic constraint participates in IPOPT's gradient-based solve with
+    exact sparse Jacobians — no finite differences, no inner loop.
+
+    Parameters
+    ----------
+    N_loads, M_loads  : running loads [N/m], [N·m/m]
+    mat               : PlyMaterial
+    angles_half_deg   : half-stack initial angle guesses [deg]
+    wing              : WingGeometry — provides semi_span, sweep, t_over_c, MTOW
+    n_load            : ultimate load factor (scales semi-span lift for θ_tip)
+    relief_min_deg    : required tip washout magnitude [deg]  (positive number)
+    use_bt_coupling   : if True, ply angles become variables and unbalanced
+                        laminates (D16 ≠ 0) are allowed — enables bend-twist
+                        coupling as a second lever alongside EI compliance.
+                        if False, angles are fixed and only EI is optimised.
+    box_fraction      : wing-box chord fraction for EI/GJ/EK computation
+    rho_kg_m3 ... verbose : same as optimize_laminate()
+
+    Returns
+    -------
+    AeroelasticOptimizationResult
+    """
+    import math as _math
+
+    n_half = len(angles_half_deg)
+    N_vec  = np.array(N_loads, dtype=float)
+    M_vec  = np.array(M_loads, dtype=float)
+
+    if thermal_state is not None:
+        pt = ply_thermal if ply_thermal is not None else IM7_8552_thermal()
+        _ang_full_init = angles_half_deg + list(reversed(angles_half_deg))
+        _lam_init = Laminate([Ply(mat, t_init, a) for a in _ang_full_init])
+        _N_T, _M_T = _thermal_resultants(
+            _lam_init.plies, [pt] * (2 * n_half),
+            thermal_state, _lam_init.z_interfaces,
+        )
+        N_vec = N_vec + _N_T
+        M_vec = M_vec + _M_T
+
+    if angle_bounds_deg is None:
+        angle_bounds_deg = [(-90.0, 90.0)] * n_half
+
+    opti = asb.Opti()
+
+    # ── Thickness variables ────────────────────────────────────────────────────
+    t      = opti.variable(n_vars=n_half, init_guess=t_init, lower_bound=t_min)
+    t_list = [t[k] for k in range(n_half)]
+
+    # ── Angle variables (if bend-twist coupling is requested) ─────────────────
+    if use_bt_coupling:
+        theta_init = _np.radians([a for a in angles_half_deg])
+        lo = _np.radians([b[0] for b in angle_bounds_deg])
+        hi = _np.radians([b[1] for b in angle_bounds_deg])
+        theta = opti.variable(n_vars=n_half, init_guess=theta_init,
+                              lower_bound=lo, upper_bound=hi)
+        theta_list = [theta[k] for k in range(n_half)]
+        # No balance constraints — allow D16 ≠ 0
+    else:
+        theta_list = [_np.radians(a) for a in angles_half_deg]
+
+    # ── ABD assembly ───────────────────────────────────────────────────────────
+    Q_bars_half = [_Q_bar_matrix(mat, theta_list[k]) for k in range(n_half)]
+    Q_bars_full = Q_bars_half + list(reversed(Q_bars_half))
+    theta_full  = theta_list + list(reversed(theta_list))
+
+    A_mat, D_mat = _build_ABD_symmetric(t_list, Q_bars_half)
+    a_comp = np.linalg.inv(A_mat)
+    d_comp = np.linalg.inv(D_mat)
+    z_mids = _ply_zmid_symmetric(t_list)
+
+    # ── Tsai-Wu constraints ────────────────────────────────────────────────────
+    eps0  = a_comp @ N_vec
+    kappa = d_comp @ M_vec
+
+    for k in range(2 * n_half):
+        Qb    = Q_bars_full[k]
+        T_k   = _T_stress(theta_full[k])
+        z_k   = z_mids[k]
+        eps_xy = eps0 + z_k * kappa
+        sig_xy = Qb  @ eps_xy
+        sig_12 = T_k @ sig_xy
+        rf_k   = _tsai_wu_rf(sig_12[0], sig_12[1], sig_12[2], mat)
+        opti.subject_to(rf_k >= rf_min)
+
+    # ── Buckling constraint ────────────────────────────────────────────────────
+    if panel_a is not None and panel_b is not None:
+        m_x = max(1, round(panel_a / panel_b))
+        RF_buckle = _buckling_rf_smooth(
+            N_vec[0], N_vec[1], N_vec[2],
+            D_mat, panel_a, panel_b, m_x, 1,
+        )
+        opti.subject_to(RF_buckle >= buckle_rf_min)
+
+    # ── Aeroelastic washout constraint (CasADi-native) ─────────────────────────
+    #
+    # Wing-box dimensions at root chord (constant, not design variables):
+    #   b_box = box_fraction * c_root  [m]
+    #   h_box = t_over_c    * c_root  [m]
+    #
+    # Bending, torsional, and coupling stiffnesses from CLT:
+    #   E_eff = A11 / h_total              [Pa]
+    #   EI    = 2 · E_eff · b_box · (h_box/2)²   [N·m²]
+    #   GJ    = 4 · D66   · b_box              [N·m²]
+    #   EK    = 2 · D16   · b_box              [N·m²]  (zero for balanced)
+    #
+    # Tip slope (elliptic spanwise lift, closed-form integral):
+    #   θ_tip = W_semi · L² / (8 · EI)     [rad]
+    #
+    # Total tip washout (sweep geometry + bend-twist coupling):
+    #   Δα_tip = −θ_tip · (tan Λ + EK/GJ)  [rad]
+    #
+    # Constraint: Δα_tip [deg] ≤ −|relief_min_deg|
+    #
+    c_root    = wing.root_chord
+    b_box     = box_fraction * c_root
+    h_box     = wing.t_over_c * c_root
+    L         = wing.semi_span
+    W_semi    = wing.mtow_n * n_load * 0.5
+    tan_sweep = _math.tan(_math.radians(wing.sweep_le_deg))
+
+    h_total   = 2.0 * sum(t_list)                            # CasADi expression
+    A11       = A_mat[0, 0]                                  # CasADi expression
+    D16       = D_mat[0, 2]                                  # zero for balanced
+    D66       = D_mat[2, 2]
+
+    E_eff     = A11 / (h_total + 1e-9)
+    EI        = 2.0 * E_eff * b_box * (h_box * 0.5) ** 2    # [N·m²]
+    GJ        = 4.0 * D66 * b_box                            # [N·m²]
+    EK        = 2.0 * D16 * b_box                            # [N·m²]
+
+    theta_tip = W_semi * L ** 2 / (8.0 * (EI + 1e-3))       # [rad]  eps for stability
+    bt_ratio  = EK / (GJ + 1e-6)
+    delta_alpha_rad = -theta_tip * (tan_sweep + bt_ratio)
+    delta_alpha_deg_expr = delta_alpha_rad * (180.0 / _math.pi)
+
+    opti.subject_to(delta_alpha_deg_expr <= -abs(relief_min_deg))
+
+    # ── Objective ─────────────────────────────────────────────────────────────
+    opti.minimize(rho_kg_m3 * 2.0 * sum(t_list))
+
+    # ── Solve ─────────────────────────────────────────────────────────────────
+    try:
+        sol       = opti.solve(verbose=verbose)
+        converged = True
+        t_half_opt = _np.array([float(sol(t[k])) for k in range(n_half)])
+        if use_bt_coupling:
+            ang_half_opt = [float(_np.degrees(sol(theta[k]))) for k in range(n_half)]
+        else:
+            ang_half_opt = list(angles_half_deg)
+
+        # Extract aeroelastic quantities at optimum
+        D16_opt = float(sol(D16))
+        D66_opt = float(sol(D66))
+        EI_opt  = float(sol(EI))
+        GJ_opt  = float(sol(GJ))
+        EK_opt  = float(sol(EK))
+        bt_opt  = float(sol(bt_ratio))
+        washout_opt = float(sol(delta_alpha_deg_expr))
+
+    except Exception as exc:
+        if verbose:
+            print(f"  Optimizer did not converge: {exc}")
+        converged    = False
+        t_half_opt   = _np.full(n_half, t_init)
+        ang_half_opt = list(angles_half_deg)
+        D16_opt = D66_opt = EI_opt = GJ_opt = EK_opt = bt_opt = 0.0
+        washout_opt = 0.0
+
+    # ── Post-process ──────────────────────────────────────────────────────────
+    t_full_opt  = _np.concatenate([t_half_opt, t_half_opt[::-1]])
+    ang_full    = ang_half_opt + list(reversed(ang_half_opt))
+    h_opt       = float(t_full_opt.sum())
+
+    lam_chk = Laminate([Ply(mat, t_full_opt[k], ang_full[k]) for k in range(2 * n_half)])
+    resp    = lam_chk.response(N=N_vec, M=M_vec)
+    fails   = check_laminate(resp, lam_chk.plies, criterion="tsai_wu", verbose=False)
+    min_rf  = float(min(r.rf for r in fails))
+
+    base = OptimizationResult(
+        angles_half    = ang_half_opt,
+        t_half         = t_half_opt,
+        t_full         = t_full_opt,
+        total_h        = h_opt,
+        areal_density  = rho_kg_m3 * h_opt,
+        min_tsai_wu_rf = min_rf,
+        rf_min_target  = rf_min,
+        converged      = converged,
+    )
+
+    return AeroelasticOptimizationResult(
+        base                 = base,
+        achieved_washout_deg = washout_opt,
+        relief_min_target    = abs(relief_min_deg),
+        D16                  = D16_opt,
+        D66                  = D66_opt,
+        EI_root              = EI_opt,
+        GJ_root              = GJ_opt,
+        EK_root              = EK_opt,
+        bt_ratio_root        = bt_opt,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Demo — python optimize_laminate.py
 # ---------------------------------------------------------------------------
 

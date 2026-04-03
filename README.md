@@ -1,6 +1,6 @@
 # composite_panel
 
-Classical Laminate Theory toolkit for sizing composite skin panels on supersonic and hypersonic airframes. Covers aerodynamic loads, CLT stiffness and stress recovery, failure criteria, panel buckling, thermal loads, flight mechanics trim, static aeroelastic correction, a CSV-backed loads database, and a gradient-based minimum-mass laminate optimizer.
+Classical Laminate Theory toolkit for sizing composite skin panels on supersonic and hypersonic airframes. Covers aerodynamic loads, CLT stiffness and stress recovery, failure criteria, panel buckling, thermal loads, flight mechanics trim, static aeroelastic correction, a CSV-backed loads database, a gradient-based minimum-mass laminate optimizer, and an aeroelastic tailoring optimizer with embedded bend-twist coupling constraints.
 
 ---
 
@@ -20,10 +20,12 @@ src/composite_panel/
 └── optimizer.py     — minimum-mass NLP via IPOPT/CasADi (single + multicase)
 
 scripts/
-├── demo_supersonic_panel.py   — CLT + failure + stacking trade for a single panel
-├── demo_multicase_sizing.py   — single-case vs multi-case optimizer comparison
-├── demo_hypersonic_wing.py    — spanwise skin sizing from Mach 0.8 to Mach 5
-└── validate_model.py          — regression checks against analytical benchmarks
+├── demo_supersonic_panel.py        — CLT + failure + stacking trade for a single panel
+├── demo_multicase_sizing.py        — single-case vs multi-case optimizer comparison
+├── demo_hypersonic_wing.py         — spanwise skin sizing from Mach 0.8 to Mach 5
+├── demo_aeroelastic_tailoring.py   — strength + aeroelastic constraint in one CasADi solve
+├── demo_sensitivity.py             — optimal mass sensitivity to n_load and Mach
+└── validate_model.py               — regression checks against analytical benchmarks
 
 tests/
 ├── test_basics.py
@@ -39,7 +41,9 @@ notebooks/
 ├── composite_panel_tutorial.ipynb
 ├── tutorial_supersonic_panel.ipynb
 ├── tutorial_multicase_sizing.ipynb
-└── tutorial_hypersonic_wing.ipynb
+├── tutorial_hypersonic_wing.ipynb
+├── tutorial_aeroelastic_tailoring.ipynb
+└── tutorial_sensitivity.ipynb
 ```
 
 ---
@@ -62,7 +66,7 @@ Core dependencies (`numpy`, `matplotlib`, `aerosandbox`) are declared in `pyproj
 pytest tests/
 ```
 
-67 tests across CLT, failure criteria (Tsai-Wu, Hashin, max-stress), buckling (including bend-twist coupling detection), input parsing, and basic integration checks.
+67 tests across CLT, failure criteria (Tsai-Wu, Hashin, max-stress), buckling (including bend-twist coupling detection), input parsing, and basic integration checks. All tests pass after the addition of `optimize_laminate_aeroelastic`.
 
 ### Analytical validation
 
@@ -92,6 +96,8 @@ Output is a colour-coded PASS/FAIL summary with tolerances and deviation from re
 python scripts/demo_supersonic_panel.py
 python scripts/demo_multicase_sizing.py
 python scripts/demo_hypersonic_wing.py
+python scripts/demo_aeroelastic_tailoring.py
+python scripts/demo_sensitivity.py
 ```
 
 Outputs are written to `outputs/`.
@@ -187,6 +193,42 @@ r = optimize_wing(wing=wing, mach=1.7, altitude_m=20_000, alpha_deg=3.0,
 
 print(f"Upper-skin mass (semi-span): {r.total_skin_mass:.1f} kg")
 ```
+
+Aeroelastic tailoring — strength + washout in one solve:
+
+```python
+from composite_panel import optimize_laminate_aeroelastic, WingGeometry
+
+wing = WingGeometry(semi_span=4.5, root_chord=2.0, taper_ratio=0.30,
+                    sweep_le_deg=45.0, t_over_c=0.04, mtow_n=60_000.0)
+
+# Balanced case — only geometric sweep contributes to washout
+r_geo = optimize_laminate_aeroelastic(
+    N_loads=N, M_loads=M, mat=mat, angles_half_deg=angles,
+    wing=wing, n_load=2.5, relief_min_deg=0.05,
+    use_bt_coupling=False,   # D16 = 0, rely on EI compliance
+    rf_min=1.5,
+)
+
+# Unbalanced case — D16 ≠ 0 augments washout via bend-twist coupling
+r_bt = optimize_laminate_aeroelastic(
+    N_loads=N, M_loads=M, mat=mat, angles_half_deg=angles,
+    wing=wing, n_load=2.5, relief_min_deg=0.05,
+    use_bt_coupling=True,    # angles free, D16 optimised
+    rf_min=1.5,
+)
+
+print(r_bt.summary())
+# Aeroelastic tailoring
+#   washout achieved : -0.0500°
+#   D16              : 44.2787 N·m
+#   EK/GJ (root)     : 0.49522
+```
+
+The aeroelastic constraint `Δα_tip ≤ −relief_min_deg` is expressed entirely in
+CasADi from the A/D matrices — IPOPT receives exact Jacobians through EI, GJ,
+and EK without a second solve or finite differences. See `docs/optimizer.md` for
+the full derivation.
 
 ### `thermal.py`
 
