@@ -1,77 +1,21 @@
 """
-composite_panel.lamination_parameters
---------------------------------------
-Lamination parameters (LPs) and stiffness polar analysis for composite laminates.
+Lamination parameters (LPs), Tsai-Pagano invariants, stiffness polars,
+and ABD reconstruction from LP space.
 
-THEORY
-======
-Lamination parameters are dimensionless integrals of trigonometric functions of
-the ply angle through the laminate thickness.  They characterise the stiffness
-completely for any layup with the same material, and span a convex feasible
-domain — making them ideal for continuous gradient-based optimisation.
-
-For a laminate of total thickness h, the four in-plane LPs are:
-
-    ξ1A = (1/h) ∫ cos(2θ) dz
-    ξ2A = (1/h) ∫ cos(4θ) dz
-    ξ3A = (1/h) ∫ sin(2θ) dz   ← zero for balanced laminates (±θ pairs)
-    ξ4A = (1/h) ∫ sin(4θ) dz   ← zero for balanced laminates
-
-And the four bending LPs (ξ1D..ξ4D) use the same integrands weighted by 12z²/h³.
-Coupling LPs (ξ1B..ξ4B) are weighted by 4z/h² and vanish for symmetric laminates.
-
-The ABD matrices are linear in the LPs via the Tsai-Pagano material invariants
-U1..U5:
-
-    A11 = h · (U1 + U2·ξ1A + U3·ξ2A)
-    A22 = h · (U1 − U2·ξ1A + U3·ξ2A)
-    A12 = h · (U4 − U3·ξ2A)
-    A66 = h · (U5 − U3·ξ2A)
-    A16 = h · (U2/2·ξ3A + U3·ξ4A)   ← non-zero for unbalanced laminates
-    A26 = h · (U2/2·ξ3A − U3·ξ4A)   ← non-zero for unbalanced laminates
-
-And identically for D (replacing h with h³/12 and ξA with ξD).
-
-STIFFNESS POLARS
-================
-For a single-angle laminate [θ]_n, the LPs reduce to:
-    ξ1A = cos(2θ),  ξ2A = cos(4θ),  ξ3A = sin(2θ),  ξ4A = sin(4θ)
-
-Sweeping θ from 0° to 180° produces stiffness polar plots showing how Ex, Ey,
-Gxy (in-plane) and D11, D22, D66 (bending) vary with fibre orientation — useful
-for inferring optimal ply angles for a given load state without running a full
-optimisation.
-
-AEROELASTIC TAILORING CONNECTION
-=================================
-Non-zero A16/A26 (unbalanced) and D16/D26 (unbalanced or off-axis stacking)
-introduce shear-extension and bend-twist coupling respectively.  For a swept
-wing, D16/D26 couple wing bending to chordwise twist, enabling passive
-aeroelastic wash-out (load relief) or wash-in (load amplification) to be
-engineered purely through laminate design — without geometric changes.
-
-References
-----------
-Tsai, S.W. & Hahn, H.T. — Introduction to Composite Materials (1980), Ch. 9
-Miki, M. — Material design of composite laminates with required in-plane
-    elastic properties (1982) ICCM-4 progress in science and engineering of
-    composites, pp. 1725-1731.
-Gürdal, Z., Haftka, R.T. & Hajela, P. — Design and Optimization of Laminated
-    Composite Materials (Wiley, 1999), Ch. 4
+Ref: Tsai & Hahn (1980), Miki (1982), Gurdal, Haftka & Hajela (1999)
 """
 
 from __future__ import annotations
 
-import math
 import warnings
 from typing import TYPE_CHECKING, Optional, Tuple
 
-import numpy as np
+import aerosandbox.numpy as np
 
-from .ply import PlyMaterial, Ply
+from composite_panel.ply import PlyMaterial, Ply
 
 if TYPE_CHECKING:
-    from .laminate import Laminate
+    from composite_panel.laminate import Laminate
 
 
 # ---------------------------------------------------------------------------
@@ -79,37 +23,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 def material_invariants(mat: PlyMaterial) -> dict:
-    """
-    Compute the five Tsai-Pagano material invariants U1..U5.
-
-    These are angle-independent combinations of the reduced stiffness
-    coefficients Qij.  They act as the "anchor points" from which the
-    laminate stiffness can be reconstructed purely from the lamination
-    parameters.
-
-    Parameters
-    ----------
-    mat : PlyMaterial
-        Orthotropic ply material (E1, E2, G12, nu12).
-
-    Returns
-    -------
-    dict with keys 'U1' through 'U5' [Pa].
-
-    Notes
-    -----
-    Derivation follows from integrating Q̄(θ) over a complete revolution,
-    which eliminates all angle-dependent terms:
-
-        U1 = (3Q11 + 3Q22 + 2Q12 + 4Q66) / 8
-        U2 = (Q11 − Q22) / 2
-        U3 = (Q11 + Q22 − 2Q12 − 4Q66) / 8
-        U4 = (Q11 + Q22 + 6Q12 − 4Q66) / 8
-        U5 = (Q11 + Q22 − 2Q12 + 4Q66) / 8  =  (U1 − U4)
-
-    Quick sanity check: for an isotropic material (E1=E2, nu12=nu21, G12=E/(2+2nu))
-    U2 = U3 = 0, and U1 = U4 + U5.
-    """
+    """Tsai-Pagano invariants U1..U5 [Pa].  Tsai & Pagano (1968), J. Composite Materials; Jones (1999), Eqs. 2.115-2.119."""
     denom = 1.0 - mat.nu12 * mat.nu21
     Q11 = mat.E1  / denom
     Q22 = mat.E2  / denom
@@ -131,35 +45,8 @@ def material_invariants(mat: PlyMaterial) -> dict:
 # ---------------------------------------------------------------------------
 
 def lamination_parameters(lam: 'Laminate') -> dict:
-    """
-    Compute the full set of 12 lamination parameters for a discrete laminate.
-
-    Parameters
-    ----------
-    lam : Laminate
-        Assembled Laminate object (any layup, symmetric or not).
-
-    Returns
-    -------
-    dict with keys:
-        'xi1A'..'xi4A'  — in-plane LPs   (dimensionless)
-        'xi1B'..'xi4B'  — coupling LPs   (dimensionless, zero for symmetric)
-        'xi1D'..'xi4D'  — bending LPs    (dimensionless)
-
-    Notes
-    -----
-    The integration is performed numerically using the ply midplane angles
-    and the standard thickness weighting:
-
-        ξiA = (1/h) Σ_k  fi(θ_k) · Δz_k
-        ξiB = (4/h²) Σ_k  fi(θ_k) · z_mid_k · Δz_k
-        ξiD = (12/h³) Σ_k  fi(θ_k) · z_mid_k² · Δz_k
-
-    where fi = [cos2θ, cos4θ, sin2θ, sin4θ] for i = 1..4.
-
-    For a balanced laminate (equal ±θ pairs): ξ3A = ξ4A = 0.
-    For a symmetric laminate (mirror about mid-plane): ξ1B..ξ4B = 0.
-    """
+    """Full 12-LP set (xi1A..xi4D) from a discrete laminate.  Exact z-integration.
+    Gurdal, Haftka & Hajela (1999), 'Design and Optimization of Laminated Composite Materials', Sec. 6.3."""
     h     = lam.thickness
     z0s   = lam.z_interfaces[:-1]
     z1s   = lam.z_interfaces[1:]
@@ -167,9 +54,9 @@ def lamination_parameters(lam: 'Laminate') -> dict:
     z_mid = (z0s + z1s) / 2.0
 
     # Ply angles [rad]
-    angles_rad = np.array([math.radians(p.angle_deg) for p in lam.plies])
+    angles_rad = np.array([np.radians(p.angle_deg) for p in lam.plies])
 
-    # Trigonometric basis functions fi(θ)
+    # Trigonometric basis functions fi(theta)
     cos2 = np.cos(2.0 * angles_rad)
     cos4 = np.cos(4.0 * angles_rad)
     sin2 = np.sin(2.0 * angles_rad)
@@ -177,14 +64,18 @@ def lamination_parameters(lam: 'Laminate') -> dict:
 
     basis = np.vstack([cos2, cos4, sin2, sin4])   # (4, n_plies)
 
-    # In-plane LPs: ξiA = (1/h) Σ fi(θk) * Δzk
+    # In-plane LPs: xiiA = (1/h) Sigma fi(thetak) * Deltazk
     xi_A = (basis @ dz) / h
 
-    # Coupling LPs: ξiB = (4/h²) Σ fi(θk) * z_mid_k * Δzk
-    xi_B = (basis @ (z_mid * dz)) * (4.0 / h**2)
+    # Coupling LPs: xiiB = (4/h^2) Sigma fi(thetak) * (z1^2 - z0^2)/2
+    # Exact integral of z dz over each ply (replaces midpoint approximation)
+    z2_exact = (z1s**2 - z0s**2) / 2.0
+    xi_B = (basis @ z2_exact) * (4.0 / h**2)
 
-    # Bending LPs: ξiD = (12/h³) Σ fi(θk) * z_mid_k² * Δzk
-    xi_D = (basis @ (z_mid**2 * dz)) * (12.0 / h**3)
+    # Bending LPs: xiiD = (12/h^3) Sigma fi(thetak) * (z1^3 - z0^3)/3
+    # Exact integral of z^2 dz over each ply (replaces midpoint approximation)
+    z3_exact = (z1s**3 - z0s**3) / 3.0
+    xi_D = (basis @ z3_exact) * (12.0 / h**3)
 
     return {
         'xi1A': float(xi_A[0]), 'xi2A': float(xi_A[1]),
@@ -205,41 +96,7 @@ def abd_from_lamination_params(
     lp:  dict,
     mat: PlyMaterial,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Reconstruct the A, B, D stiffness matrices from lamination parameters.
-
-    This is the inverse mapping from LP space back to physical stiffness —
-    useful for checking feasibility and for LP-based optimisation.
-
-    Parameters
-    ----------
-    h   : float
-        Total laminate thickness [m].
-    lp  : dict
-        Lamination parameters as returned by lamination_parameters().
-    mat : PlyMaterial
-        Ply material (needed for invariants U1..U5).
-
-    Returns
-    -------
-    A : np.ndarray (3, 3)  [N/m]
-    B : np.ndarray (3, 3)  [N]
-    D : np.ndarray (3, 3)  [N·m]
-
-    Notes
-    -----
-    The reconstruction is exact for any laminate built from a single
-    material system.  The formulas are:
-
-        A11 = h·(U1 + U2·ξ1A + U3·ξ2A)
-        A22 = h·(U1 − U2·ξ1A + U3·ξ2A)
-        A12 = h·(U4 − U3·ξ2A)
-        A66 = h·(U5 − U3·ξ2A)
-        A16 = h·(U2/2·ξ3A + U3·ξ4A)
-        A26 = h·(U2/2·ξ3A − U3·ξ4A)
-
-    and identically for D (h → h³/12, ξA → ξD) and B (h → h²/4, ξA → ξB).
-    """
+    """Reconstruct A, B, D from LPs and material invariants.  Jones (1999), Eqs. 4.20-4.22 combined with Tsai & Pagano (1968) invariant form."""
     inv = material_invariants(mat)
     U1, U2, U3, U4, U5 = inv['U1'], inv['U2'], inv['U3'], inv['U4'], inv['U5']
 
@@ -274,58 +131,12 @@ def stiffness_polar(
     label:           str   = '',
     show:            bool  = True,
 ) -> object:
-    """
-    Plot in-plane and bending stiffness as a function of single-angle fibre
-    orientation θ (0° → 180°).
-
-    For a single-angle laminate [θ]_n the lamination parameters collapse to:
-        ξ1A = cos(2θ),  ξ2A = cos(4θ),  ξ3A = sin(2θ),  ξ4A = sin(4θ)
-
-    This function sweeps θ and plots:
-        In-plane  : Ex(θ), Ey(θ), Gxy(θ)  [GPa]
-        Bending   : D11(θ), D22(θ), D66(θ) normalised by D11(0°)
-
-    Parameters
-    ----------
-    mat       : PlyMaterial
-        Ply material.
-    h_total   : float
-        Total laminate thickness [m].
-    n_angles  : int
-        Number of angle points to sweep (default 181 → 1° steps).
-    ax_inplane : matplotlib Axes, optional
-        Axes to draw in-plane plot onto.  If None, created internally.
-    ax_bending : matplotlib Axes, optional
-        Axes to draw bending plot onto.  If None, created internally.
-    label     : str
-        Legend label suffix (useful when overlaying multiple materials).
-    show      : bool
-        Call plt.show() at the end (set False for embedding in larger figures).
-
-    Returns
-    -------
-    fig : matplotlib Figure
-        Figure containing both subplots.
-
-    Notes
-    -----
-    The stiffness polars are a fast way to infer optimal ply orientations
-    without running a full NLP:
-
-      • High axial load Nxx   → maximise Ex  → θ ≈ 0°
-      • High transverse Nyy   → maximise Ey  → θ ≈ 90°
-      • High shear Nxy        → maximise Gxy → θ ≈ 45°
-      • Bending Mxx, buckling → maximise D11 → θ ≈ 0°
-      • Twisting Mxy          → maximise D66 → θ ≈ 45°
-
-    The crossover angles (where Ex = Ey, or D11 = D22) reveal the
-    quasi-isotropic orientation and guide multi-objective trade-offs.
-    """
+    """Plot Ex/Ey/Gxy and D11/D22/D66 vs fibre angle for a single-angle laminate."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    from .laminate import Laminate
+    from composite_panel.laminate import Laminate
 
     inv = material_invariants(mat)
     U1, U2, U3, U4, U5 = inv['U1'], inv['U2'], inv['U3'], inv['U4'], inv['U5']
@@ -349,7 +160,7 @@ def stiffness_polar(
     A26 = h * (0.5*U2*sin2 - U3*sin4)
 
     # Engineering constants from compliance (A16 != 0 for off-axis)
-    # Full 3×3 inversion per angle is accurate for the off-axis case
+    # Full 3x3 inversion per angle is accurate for the off-axis case
     Ex_arr  = np.empty(n_angles)
     Ey_arr  = np.empty(n_angles)
     Gxy_arr = np.empty(n_angles)
@@ -366,7 +177,7 @@ def stiffness_polar(
         except np.linalg.LinAlgError:
             Ex_arr[i] = Ey_arr[i] = Gxy_arr[i] = float('nan')
 
-    # Bending stiffness [N·m]
+    # Bending stiffness [N*m]
     D11 = (h**3/12) * (U1 + U2*cos2 + U3*cos4)
     D22 = (h**3/12) * (U1 - U2*cos2 + U3*cos4)
     D12 = (h**3/12) * (U4 - U3*cos4)
@@ -374,9 +185,9 @@ def stiffness_polar(
     D16 = (h**3/12) * (0.5*U2*sin2 + U3*sin4)
     D26 = (h**3/12) * (0.5*U2*sin2 - U3*sin4)
 
-    D11_ref = float(D11[0])   # normalise to D11 at θ=0°
+    D11_ref = float(D11[0])   # normalise to D11 at theta=0deg
 
-    # ── Plotting ─────────────────────────────────────────────────────────────
+    # == Plotting ============================================================?
     if ax_inplane is None or ax_bending is None:
         fig, (ax_in, ax_bd) = plt.subplots(1, 2, figsize=(12, 5),
                                             facecolor='#0d1117')
@@ -402,7 +213,7 @@ def stiffness_polar(
                label=f'$E_y${lbl}')
     ax_in.plot(thetas_deg, Gxy_arr / GPa, color='#3fb950', lw=2,
                label=f'$G_{{xy}}${lbl}')
-    ax_in.set_xlabel('Fibre angle θ [°]')
+    ax_in.set_xlabel('Fibre angle theta [deg]')
     ax_in.set_ylabel('Effective modulus [GPa]')
     ax_in.set_title('In-plane stiffness polar')
     ax_in.set_xlim(0, 180)
@@ -410,7 +221,7 @@ def stiffness_polar(
     ax_in.legend(framealpha=0.25, labelcolor='#c9d1d9', fontsize=9)
     ax_in.grid(True, color='#21262d', lw=0.5)
 
-    # Bending — normalised to D11(0°) for unit-less comparison
+    # Bending  --  normalised to D11(0deg) for unit-less comparison
     ax_bd.plot(thetas_deg, D11 / D11_ref, color='#58a6ff', lw=2,
                label=f'$D_{{11}}/D_{{11}}^0${lbl}')
     ax_bd.plot(thetas_deg, D22 / D11_ref, color='#f78166', lw=2,
@@ -421,8 +232,8 @@ def stiffness_polar(
                ls='--', label=f'$|D_{{16}}|/D_{{11}}^0${lbl}')
     ax_bd.plot(thetas_deg, np.abs(D26) / D11_ref, color='#ffa657', lw=1.5,
                ls='--', label=f'$|D_{{26}}|/D_{{11}}^0${lbl}')
-    ax_bd.set_xlabel('Fibre angle θ [°]')
-    ax_bd.set_ylabel(f'Bending stiffness / $D_{{11}}(0°)$')
+    ax_bd.set_xlabel('Fibre angle theta [deg]')
+    ax_bd.set_ylabel(f'Bending stiffness / $D_{{11}}(0deg)$')
     ax_bd.set_title('Out-of-plane (bending) stiffness polar')
     ax_bd.set_xlim(0, 180)
     ax_bd.set_xticks(range(0, 181, 30))
@@ -443,7 +254,7 @@ def stiffness_polar(
             ax.axvline(thetas_deg[idx_peak], color='#ffffff', lw=0.5, alpha=0.3)
 
     fig.suptitle(
-        f'Stiffness polars — {getattr(mat, "name", "composite")}  |  '
+        f'Stiffness polars  --  {getattr(mat, "name", "composite")}  |  '
         f'h = {h_total*1e3:.2f} mm',
         color='#f0f6fc', fontsize=11,
     )
@@ -456,33 +267,11 @@ def stiffness_polar(
 
 
 # ---------------------------------------------------------------------------
-# LP feasibility domain (in-plane, ξ1A–ξ2A plane)
+# LP feasibility domain (in-plane, xi1A-xi2A plane)
 # ---------------------------------------------------------------------------
 
 def plot_lp_feasibility(ax=None, show: bool = True) -> object:
-    """
-    Sketch the feasible domain for in-plane lamination parameters in the
-    (ξ1A, ξ2A) plane.
-
-    The physical constraints are:
-        −1 ≤ ξ1A ≤ 1
-        2ξ1A² − 1 ≤ ξ2A ≤ 1     (Miki's parabolic boundary)
-
-    The parabolic lower bound arises from the Cauchy-Schwarz inequality
-    applied to the LP integrals: cos(4θ) ≥ 2cos²(2θ) − 1.
-
-    Single-angle laminates trace the boundary parabola (ξ2A = 2ξ1A² − 1).
-    Cross-plies and angle-plies populate the interior.
-
-    Parameters
-    ----------
-    ax   : matplotlib Axes, optional
-    show : bool
-
-    Returns
-    -------
-    fig : matplotlib Figure
-    """
+    """Plot the Miki parabolic feasibility domain in the (xi1A, xi2A) plane."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -498,7 +287,7 @@ def plot_lp_feasibility(ax=None, show: bool = True) -> object:
     else:
         fig = ax.get_figure()
 
-    # Feasibility boundary
+    # Feasibility boundary.  Miki (1982), AIAA Journal, Eq. 8.
     xi1 = np.linspace(-1, 1, 400)
     xi2_lo = 2*xi1**2 - 1   # Miki's parabola (lower)
     xi2_hi = np.ones_like(xi1)
@@ -512,9 +301,9 @@ def plot_lp_feasibility(ax=None, show: bool = True) -> object:
 
     # Annotate characteristic points
     pts = {
-        '0°':   (1, 1),
-        '90°':  (-1, 1),
-        '±45°': (0, -1),
+        '0deg':   (1, 1),
+        '90deg':  (-1, 1),
+        '+/-45deg': (0, -1),
         'QI':   (0, 0),   # quasi-isotropic
     }
     for name, (x, y) in pts.items():
@@ -542,60 +331,26 @@ def plot_lp_feasibility(ax=None, show: bool = True) -> object:
 # ---------------------------------------------------------------------------
 
 def bend_twist_coupling_index(lam: 'Laminate') -> float:
-    """
-    Return a dimensionless bend-twist coupling index for the laminate.
-
-    Defined as:
-
-        BTC = |D16| / sqrt(D11 · D66)
-
-    BTC = 0   for balanced laminates (D16 = 0)
-    BTC → 1   for maximum coupling (theoretical upper bound)
-
-    This index quantifies the aeroelastic tailoring potential:
-    high BTC with appropriate sign gives effective wash-out on swept wings.
-
-    Parameters
-    ----------
-    lam : Laminate
-
-    Returns
-    -------
-    float in [0, 1]
-    """
+    """BTC = |D16| / sqrt(D11*D66).  0 for balanced, ~1 max coupling.
+    York (2017), J. Composite Materials, Eq. 1."""
     D = lam.D
     D16 = D[0, 2]
     D11 = D[0, 0]
     D66 = D[2, 2]
-    denom = math.sqrt(abs(D11 * D66))
+    denom = np.sqrt(abs(D11 * D66))
     if denom < 1e-30:
         return 0.0
     return abs(D16) / denom
 
 
 def shear_extension_coupling_index(lam: 'Laminate') -> float:
-    """
-    Dimensionless shear-extension coupling index.
-
-        SEC = |A16| / sqrt(A11 · A66)
-
-    SEC = 0 for balanced laminates (A16 = 0).
-    Non-zero SEC causes in-plane shear distortion under pure axial loading,
-    which is relevant for aeroelastic tailoring of compression-loaded panels.
-
-    Parameters
-    ----------
-    lam : Laminate
-
-    Returns
-    -------
-    float in [0, 1]
-    """
+    """SEC = |A16| / sqrt(A11*A66).  0 for balanced laminates.
+    York (2017), J. Composite Materials, Eq. 2."""
     A = lam.A
     A16 = A[0, 2]
     A11 = A[0, 0]
     A66 = A[2, 2]
-    denom = math.sqrt(abs(A11 * A66))
+    denom = np.sqrt(abs(A11 * A66))
     if denom < 1e-30:
         return 0.0
     return abs(A16) / denom

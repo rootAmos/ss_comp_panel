@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import numpy as np
 from composite_panel import Ply, Laminate, IM7_8552, T300_5208
 from composite_panel import check_laminate, tsai_wu
-from composite_panel import supersonic_panel_loads
+from composite_panel import WingGeometry, wing_panel_loads
 
 
 def test_ply_Q_symmetric():
@@ -29,7 +29,7 @@ def test_Qbar_90_deg():
     mat = IM7_8552()
     p0  = Ply(mat, 0.125e-3,  0.0)
     p90 = Ply(mat, 0.125e-3, 90.0)
-    # Q11 at 0° should equal Q22 at 90° (transverse becomes fibre direction)
+    # Q11 at 0deg should equal Q22 at 90deg (transverse becomes fibre direction)
     assert abs(p0.Q_bar[0, 0] - p90.Q_bar[1, 1]) < 1.0
 
 
@@ -60,7 +60,7 @@ def test_response_zero_loads():
 
 
 def test_tsai_wu_high_load_fails():
-    """Apply a load 100× the F1t strength – should definitely fail."""
+    """Apply a load 100x the F1t strength - should definitely fail."""
     mat   = IM7_8552()
     plies = [Ply(mat, 0.125e-3, 0.0)]
     lam   = Laminate(plies)
@@ -71,25 +71,27 @@ def test_tsai_wu_high_load_fails():
 
 
 def test_tsai_wu_low_load_passes():
-    """Apply a small load – should pass easily."""
+    """Apply a small load - should pass easily."""
     mat   = IM7_8552()
     plies = [Ply(mat, 0.125e-3, a) for a in [-45, 0, 45, 90, 90, 45, 0, -45]]
     lam   = Laminate(plies)
-    N_small = np.array([1e3, 0, 0])   # 1 kN/m – trivially safe
+    N_small = np.array([1e3, 0, 0])   # 1 kN/m - trivially safe
     res   = lam.response(N=N_small)
     results = check_laminate(res, plies, criterion='tsai_wu', verbose=False)
     assert not any(r.failed for r in results)
 
 
-def test_supersonic_loads_physical():
-    loads = supersonic_panel_loads(
-        mach=1.6, altitude_m=15000, alpha_deg=3.0,
-        panel_chord=0.8, panel_span=0.5
+def test_wing_panel_loads_physical():
+    wing = WingGeometry(
+        semi_span=4.5, root_chord=2.0, taper_ratio=0.3,
+        sweep_le_deg=45.0, t_over_c=0.04, mtow_n=150_000.0,
     )
-    # Compression on upper skin → negative Nyy
+    loads = wing_panel_loads(wing, eta=0.4, mach=1.6, altitude_m=15000,
+                             alpha_deg=3.0, n_load=2.5)
     assert loads.Nyy < 0, "Expected compressive Nyy on upper surface"
-    assert abs(loads.Nxx) > 0
-    assert abs(loads.Nxy) > 0
+    assert loads.Nxx < 0, "Expected compressive Nxx from wing bending"
+    assert loads.Nxy > 0, "Expected positive Nxy from sweep"
+    assert loads.Mxx > 0, "Expected positive Mxx from pressure"
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from composite_panel.loads_db import LoadCase, LoadsDatabase
 from composite_panel.ply import PlyMaterial
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# -- helpers -------------------------------------------------------------------
 
 def _write_csv(content: str) -> str:
     """Write content to a temp file, return path."""
@@ -24,9 +24,9 @@ def _write_csv(content: str) -> str:
     return f.name
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# LoadsDatabase.from_csv — messy CSV
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
+# LoadsDatabase.from_csv  --  messy CSV
+# ===============================================================================
 
 def test_clean_csv_roundtrip(tmp_path):
     db = LoadsDatabase([
@@ -56,7 +56,7 @@ def test_headers_with_spaces():
         name , N xx , N yy , N xy
         load1,-150000,-50000,8000
     """)
-    # "N xx" normalises to "n_xx" → alias → Nxx
+    # "N xx" normalises to "n_xx" -> alias -> Nxx
     db = LoadsDatabase.from_csv(path)
     assert abs(db[0].Nxx - (-150e3)) < 1.0
 
@@ -141,9 +141,9 @@ def test_unparseable_value_raises():
         LoadsDatabase.from_csv(path)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 # LoadsDatabase.from_dict
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 
 def test_from_dict_basic():
     db = LoadsDatabase.from_dict([
@@ -174,31 +174,30 @@ def test_from_dict_missing_required_raises():
         LoadsDatabase.from_dict([{"name": "A", "Nxx": -100e3}])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 # PlyMaterial.from_dict
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 
-def test_from_dict_GPa_autoconvert():
+def test_from_dict_eng_units():
     mat = PlyMaterial.from_dict({
         "E1": 171.4, "E2": 9.08, "G12": 5.29, "nu12": 0.32,
-    })
+    }, units="eng")
     assert mat.E1 == pytest.approx(171.4e9, rel=1e-6)
     assert mat.E2 == pytest.approx(9.08e9,  rel=1e-6)
 
 
-def test_from_dict_Pa_passthrough():
-    # Values > 1000 treated as already in Pa
+def test_from_dict_SI_passthrough():
     mat = PlyMaterial.from_dict({
         "E1": 171.4e9, "E2": 9.08e9, "G12": 5.29e9, "nu12": 0.32,
     })
     assert mat.E1 == pytest.approx(171.4e9, rel=1e-6)
 
 
-def test_from_dict_MPa_strength_autoconvert():
+def test_from_dict_eng_strength():
     mat = PlyMaterial.from_dict({
         "E1": 171.4, "E2": 9.08, "G12": 5.29, "nu12": 0.32,
         "F1t": 2326, "F1c": 1200, "F2t": 62, "F2c": 200, "F12": 110,
-    })
+    }, units="eng")
     assert mat.F1t == pytest.approx(2326e6, rel=1e-6)
     assert mat.F2t == pytest.approx(62e6,   rel=1e-6)
 
@@ -207,21 +206,21 @@ def test_from_dict_key_aliases():
     mat = PlyMaterial.from_dict({
         "e_fibre": 171.4, "e_transverse": 9.08, "g_shear": 5.29, "poisson": 0.32,
         "Xt": 2326, "Xc": 1200, "Yt": 62, "Yc": 200, "S12": 110,
-    })
+    }, units="eng")
     assert mat.E1  == pytest.approx(171.4e9, rel=1e-6)
     assert mat.F1t == pytest.approx(2326e6,  rel=1e-6)
 
 
 def test_from_dict_maxwell_reciprocity():
     mat = PlyMaterial.from_dict({
-        "E1": 171.4, "E2": 9.08, "G12": 5.29, "nu12": 0.32,
+        "E1": 171.4e9, "E2": 9.08e9, "G12": 5.29e9, "nu12": 0.32,
     })
     assert mat.nu21 == pytest.approx(mat.nu12 * mat.E2 / mat.E1, rel=1e-10)
 
 
 def test_from_dict_missing_required_raises():
     with pytest.raises(ValueError, match="missing required"):
-        PlyMaterial.from_dict({"E1": 171.4, "E2": 9.08})  # missing G12, nu12
+        PlyMaterial.from_dict({"E1": 171.4e9, "E2": 9.08e9})  # missing G12, nu12
 
 
 def test_from_dict_matches_IM7_8552():
@@ -233,6 +232,13 @@ def test_from_dict_matches_IM7_8552():
         "F1t": ref.F1t / 1e6, "F1c": ref.F1c / 1e6,
         "F2t": ref.F2t / 1e6, "F2c": ref.F2c / 1e6,
         "F12": ref.F12 / 1e6,
-    })
+    }, units="eng")
     assert mat.E1  == pytest.approx(ref.E1,  rel=1e-6)
     assert mat.F1t == pytest.approx(ref.F1t, rel=1e-6)
+
+
+def test_from_dict_small_values_raise():
+    with pytest.raises(ValueError, match="too small"):
+        PlyMaterial.from_dict({
+            "E1": 171.4, "E2": 9.08, "G12": 5.29, "nu12": 0.32,
+        })  # forgot units='eng' -- should fail, not silently convert

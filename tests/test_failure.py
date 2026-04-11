@@ -32,7 +32,7 @@ def test_rf_at_failure_boundary(mat, sigma, label):
 
 
 def test_rf_scales_with_load(mat):
-    # Half the load → RF should approximately double (linear region)
+    # Half the load -> RF should approximately double (linear region)
     rf_full = tsai_wu(mat, np.array([mat.F1t,      0, 0])).rf
     rf_half = tsai_wu(mat, np.array([mat.F1t * 0.5, 0, 0])).rf
     assert abs(rf_half - 2 * rf_full) / (2 * rf_full) < 0.02
@@ -69,7 +69,7 @@ def test_governing_ply_has_minimum_rf(mat):
 
 
 def test_high_Nxx_makes_0deg_ply_govern(mat):
-    # Under strong spanwise compression, 0° ply should have highest stress (lowest RF)
+    # Under strong spanwise compression, 0deg ply should have highest stress (lowest RF)
     t = 0.125e-3
     plies = [Ply(mat, t, a) for a in [0, 45, -45, 90, 90, -45, 45, 0]]
     lam = Laminate(plies)
@@ -82,7 +82,7 @@ def test_high_Nxx_makes_0deg_ply_govern(mat):
 # --- Hashin criterion ---
 
 def test_hashin_fiber_tension_at_boundary(mat):
-    # Pure σ1 = F1t → fiber tension mode → RF = 1.0
+    # Pure sigma1 = F1t -> fiber tension mode -> RF = 1.0
     sig = np.array([mat.F1t, 0.0, 0.0])
     res = hashin(mat, sig)
     assert abs(res.rf_1 - 1.0) < 0.02
@@ -90,14 +90,14 @@ def test_hashin_fiber_tension_at_boundary(mat):
 
 
 def test_hashin_fiber_compression_at_boundary(mat):
-    # Pure σ1 = -F1c → fiber compression mode → RF = 1.0
+    # Pure sigma1 = -F1c -> fiber compression mode -> RF = 1.0
     sig = np.array([-mat.F1c, 0.0, 0.0])
     res = hashin(mat, sig)
     assert abs(res.rf_1 - 1.0) < 0.02
 
 
 def test_hashin_matrix_tension_at_boundary(mat):
-    # Pure σ2 = F2t → matrix tension mode → RF = 1.0
+    # Pure sigma2 = F2t -> matrix tension mode -> RF = 1.0
     sig = np.array([0.0, mat.F2t, 0.0])
     res = hashin(mat, sig)
     assert abs(res.rf_2 - 1.0) < 0.02
@@ -105,10 +105,10 @@ def test_hashin_matrix_tension_at_boundary(mat):
 
 
 def test_hashin_shear_at_boundary(mat):
-    # Pure τ12 = F12 → both fiber tension and matrix tension modes fire
+    # Pure tau12 = F12 -> both fiber tension and matrix tension modes fire
     sig = np.array([0.0, 0.0, mat.F12])
     res = hashin(mat, sig)
-    # Both modes include shear; both should give RF ≈ 1.0
+    # Both modes include shear; both should give RF ~= 1.0
     assert abs(res.rf_1 - 1.0) < 0.02
     assert abs(res.rf_2 - 1.0) < 0.02
 

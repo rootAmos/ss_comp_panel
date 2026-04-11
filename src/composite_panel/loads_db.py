@@ -7,7 +7,7 @@ CSV schema: name, Nxx, Nyy, Nxy [required],
             Mxx, Myy, Mxy, source, eta, description [optional]
 Units: N/m (running forces), N.m/m (moments).  Compression negative.
 
-Refs: CS-25 §25.305, MIL-A-8861
+Refs: FAR 25.337 (limit maneuvering loads), FAR 25.331 (flight load conditions)
 """
 
 from __future__ import annotations
@@ -16,33 +16,14 @@ import csv
 import os
 from dataclasses import dataclass, field, asdict
 from typing import ClassVar, List, Optional, Iterator
-import numpy as _np
+import aerosandbox.numpy as np
 
 
 
 
 @dataclass
 class LoadCase:
-    """
-    Panel running loads at a single flight condition.
-
-    All loads follow the CLT sign convention:
-      - Compression is negative for Nxx, Nyy
-      - Positive Nxy is right-hand shear on the x-face
-
-    Attributes
-    ----------
-    name        : identifier (e.g. 'M1.7_2.5g_root')
-    Nxx         : spanwise running force [N/m]
-    Nyy         : chordwise running force [N/m]
-    Nxy         : in-plane shear force [N/m]
-    Mxx         : spanwise bending moment [N·m/m]
-    Myy         : chordwise bending moment [N·m/m]
-    Mxy         : twisting moment [N·m/m]
-    source      : origin of loads (e.g. 'CFD', 'Ackeret', 'VLM', 'test')
-    eta         : spanwise station η = y/b  (optional; for sorting/filtering)
-    description : free-text annotation
-    """
+    """Panel running loads [N/m] at a single flight condition.  Compression negative."""
     name:        str
     Nxx:         float
     Nyy:         float
@@ -56,14 +37,14 @@ class LoadCase:
 
 
     @property
-    def N(self) -> _np.ndarray:
+    def N(self) -> np.ndarray:
         """Force resultant vector [Nxx, Nyy, Nxy] [N/m]."""
-        return _np.array([self.Nxx, self.Nyy, self.Nxy], dtype=float)
+        return np.array([self.Nxx, self.Nyy, self.Nxy], dtype=float)
 
     @property
-    def M(self) -> _np.ndarray:
-        """Moment resultant vector [Mxx, Myy, Mxy] [N·m/m]."""
-        return _np.array([self.Mxx, self.Myy, self.Mxy], dtype=float)
+    def M(self) -> np.ndarray:
+        """Moment resultant vector [Mxx, Myy, Mxy] [N*m/m]."""
+        return np.array([self.Mxx, self.Myy, self.Mxy], dtype=float)
 
     @property
     def max_compression(self) -> float:
@@ -123,7 +104,7 @@ class LoadsDatabase:
     _REQUIRED = ("name", "Nxx", "Nyy", "Nxy")
     _FLOAT_FIELDS = ("Nxx", "Nyy", "Nxy", "Mxx", "Myy", "Mxy", "eta")
 
-    # Aliases: maps lowercase variant → canonical field name.
+    # Aliases: maps lowercase variant -> canonical field name.
     # Handles column headers from different tools/conventions.
     _ALIASES: ClassVar[dict] = {
         "n_xx": "Nxx", "nxx": "Nxx", "nx": "Nxx", "nspan": "Nxx",
@@ -140,29 +121,22 @@ class LoadsDatabase:
 
     @staticmethod
     def _parse_float(raw: str, field: str, row_num: int) -> float:
-        """
-        Parse a float from a raw CSV string, handling common real-world formats:
-          - Whitespace padding:   "  -150.0  "
-          - kN/m suffix:          "-150 kN/m"  → multiplied by 1000
-          - kN suffix:            "-150kN"     → multiplied by 1000
-          - Parenthesised negatives: "(150)"   → -150
-          - Comma thousands sep:  "1,500"      → 1500
-        """
+        """Parse float from CSV string.  Handles kN/m suffix, parens, commas."""
         s = raw.strip()
-        if not s or s in ("-", "—", "n/a", "na", "none"):
+        if not s or s in ("-", " -- ", "n/a", "na", "none"):
             return float("nan")
 
-        # parenthesised negatives: (150) → -150
+        # parenthesised negatives: (150) -> -150
         if s.startswith("(") and s.endswith(")"):
             s = "-" + s[1:-1]
 
-        # strip thousands-separator commas  ("1,500" → "1500")
+        # strip thousands-separator commas  ("1,500" -> "1500")
         s = s.replace(",", "")
 
-        # detect kN/m or kN unit suffix → multiply by 1e3
+        # detect kN/m or kN unit suffix -> multiply by 1e3
         factor = 1.0
         lower = s.lower()
-        for suffix in ("kn/m", "kn·m/m", "kn·m", "kn"):
+        for suffix in ("kn/m", "kn*m/m", "kn*m", "kn"):
             if lower.endswith(suffix):
                 s = s[: -len(suffix)].strip()
                 factor = 1e3
@@ -199,18 +173,7 @@ class LoadsDatabase:
 
     @classmethod
     def from_csv(cls, path: str) -> "LoadsDatabase":
-        """
-        Load from CSV.  Required columns: name, Nxx, Nyy, Nxy (case-insensitive).
-
-        Handles common messy-data issues:
-          - Column headers with wrong case or spaces (e.g. "NXX", "n xx")
-          - Loads in kN/m instead of N/m (auto-detected from suffix)
-          - Parenthesised negatives: (150) → -150
-          - Thousands separators: 1,500 → 1500
-          - Comment lines starting with '#'
-          - BOM in UTF-8 files (utf-8-sig encoding)
-          - Extra unknown columns (ignored)
-        """
+        """Load from CSV.  Required: name, Nxx, Nyy, Nxy.  Handles messy headers/units."""
         cases = []
         try:
             fh = open(path, newline="", encoding="utf-8-sig")
@@ -240,7 +203,7 @@ class LoadsDatabase:
                 col = hmap.get(fld)
                 raw = row.get(col, "").strip() if col else ""
                 val = cls._parse_float(raw, fld, row_num)
-                if _np.isnan(val):
+                if np.isnan(val):
                     kwargs[fld] = 0.0 if fld != "eta" else float("nan")
                 else:
                     kwargs[fld] = val
@@ -253,20 +216,7 @@ class LoadsDatabase:
 
     @classmethod
     def from_dict(cls, records: list) -> "LoadsDatabase":
-        """
-        Build a LoadsDatabase from a list of dicts (e.g. from JSON or a DataFrame).
-
-        Each dict must contain 'name', 'Nxx', 'Nyy', 'Nxy' (case-insensitive).
-        All other fields are optional.  String values with kN/m suffixes are
-        parsed the same way as from_csv.
-
-        Example
-        -------
-        >>> db = LoadsDatabase.from_dict([
-        ...     {"name": "1g_cruise", "Nxx": "-120 kN/m", "Nyy": -40e3, "Nxy": 5e3},
-        ...     {"Name": "3g_pull",   "NXX": -400e3,      "Nyy": -60e3, "Nxy": 12e3},
-        ... ])
-        """
+        """Build from list of dicts.  Same parsing as from_csv."""
         cases = []
         for row_num, record in enumerate(records, start=1):
             # Normalise keys
@@ -296,7 +246,7 @@ class LoadsDatabase:
                     kwargs[fld] = 0.0 if fld != "eta" else float("nan")
                 elif isinstance(raw, str):
                     val = cls._parse_float(raw, fld, row_num)
-                    kwargs[fld] = val if not _np.isnan(val) else (0.0 if fld != "eta" else float("nan"))
+                    kwargs[fld] = val if not np.isnan(val) else (0.0 if fld != "eta" else float("nan"))
                 else:
                     kwargs[fld] = float(raw)
 
@@ -315,7 +265,7 @@ class LoadsDatabase:
         ]
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w", newline="", encoding="utf-8") as f:
-            f.write("# LoadsDatabase — generated by composite_panel\n")
+            f.write("# LoadsDatabase  --  generated by composite_panel\n")
             f.write(f"# Units: N [N/m], M [N.m/m]\n")
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -329,13 +279,13 @@ class LoadsDatabase:
                     "Myy":         f"{c.Myy:.2f}",
                     "Mxy":         f"{c.Mxy:.2f}",
                     "source":      c.source,
-                    "eta":         f"{c.eta:.4f}" if not _np.isnan(c.eta) else "",
+                    "eta":         f"{c.eta:.4f}" if not np.isnan(c.eta) else "",
                     "description": c.description,
                 })
 
 
     def filter_eta(self, eta: float, tol: float = 0.02) -> "LoadsDatabase":
-        """Return cases within ±tol of spanwise station eta."""
+        """Return cases within +/-tol of spanwise station eta."""
         return LoadsDatabase(
             [c for c in self.cases if abs(c.eta - eta) <= tol]
         )
@@ -348,21 +298,8 @@ class LoadsDatabase:
 
     def envelope_case(self, name: str = "envelope") -> LoadCase:
         """
-        Conservative component-wise envelope (worst-case per component).
-
-        Returns a single LoadCase with:
-          Nxx = min(all Nxx)   — most compressive spanwise load
-          Nyy = min(all Nyy)   — most compressive chordwise load
-          Nxy = max(|all Nxy|) — largest magnitude shear
-
-        WARNING: this is a conservative but potentially non-physical load
-        combination — the worst Nxx and worst Nyy may not occur simultaneously.
-        Use optimize_laminate_multicase() with ALL cases for the physically
-        correct approach.
-
-        Returns
-        -------
-        LoadCase  (source='envelope')
+        Component-wise worst-case envelope.  Conservative but non-physical --
+        use multicase optimizer for proper simultaneous sizing.
         """
         Nxx_vals = [c.Nxx for c in self.cases]
         Nyy_vals = [c.Nyy for c in self.cases]
@@ -384,12 +321,12 @@ class LoadsDatabase:
     def summary(self) -> str:
         """Formatted table of all cases."""
         lines = [
-            f"LoadsDatabase — {len(self.cases)} cases",
+            f"LoadsDatabase  --  {len(self.cases)} cases",
             f"  {'Name':<22} {'Nxx':>9} {'Nyy':>9} {'Nxy':>9}  {'Source':<14}  eta",
             f"  {'-'*22} {'-'*9} {'-'*9} {'-'*9}  {'-'*14}  ---",
         ]
         for c in self.cases:
-            eta_str = f"{c.eta:.3f}" if not _np.isnan(c.eta) else "  —  "
+            eta_str = f"{c.eta:.3f}" if not np.isnan(c.eta) else "   --   "
             lines.append(
                 f"  {c.name:<22} {c.Nxx/1e3:>+8.1f}k {c.Nyy/1e3:>+8.1f}k "
                 f"{c.Nxy/1e3:>+8.1f}k  {c.source:<14}  {eta_str}"
@@ -397,7 +334,7 @@ class LoadsDatabase:
         # Show overall envelope
         env = self.envelope_case()
         lines += [
-            f"  {'─'*22} {'─'*9} {'─'*9} {'─'*9}",
+            f"  {'='*22} {'='*9} {'='*9} {'='*9}",
             f"  {'ENVELOPE':<22} {env.Nxx/1e3:>+8.1f}k {env.Nyy/1e3:>+8.1f}k "
             f"{env.Nxy/1e3:>+8.1f}k",
         ]
@@ -410,7 +347,7 @@ class LoadsDatabase:
 if __name__ == "__main__":
     import sys as _sys
     _sys.stdout.reconfigure(encoding="utf-8")
-    # Representative flight envelope for a supersonic wing skin at η=0.5
+    # Representative flight envelope for a supersonic wing skin at eta=0.5
     records = [
         {"name": "M1.4_1g_mid",   "Nxx": -120e3, "Nyy":  -50e3, "Nxy": 18e3,
          "Mxx": 25.0, "source": "Ackeret", "eta": 0.5,

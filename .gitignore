@@ -4,3 +4,5 @@ __pycache__/
 dist/
 build/
 .claude/
+.agents
+skills-lock.json

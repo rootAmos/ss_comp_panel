@@ -28,7 +28,7 @@ def test_A11_unidirectional(mat, t):
 
 
 def test_90deg_rotation_symmetry(mat, t):
-    # [90]8 A22 should equal [0]8 A11 — same material, just rotated
+    # [90]8 A22 should equal [0]8 A11  --  same material, just rotated
     lam_0  = Laminate([Ply(mat, t, 0.0)]  * 8)
     lam_90 = Laminate([Ply(mat, t, 90.0)] * 8)
     assert abs(lam_90.A[1, 1] - lam_0.A[0, 0]) / lam_0.A[0, 0] < 1e-6
@@ -50,11 +50,11 @@ def test_balanced_A16_A26_zero(mat, t):
 def test_symmetric_B_zero(mat, t):
     # Any symmetric layup: B = 0 identically
     lam = Laminate([Ply(mat, t, a) for a in [-45, 0, 45, 90, 90, 45, 0, -45]])
-    assert np.abs(lam.B).max() < 1e-3   # [N] — numerical zero
+    assert np.abs(lam.B).max() < 1e-3   # [N]  --  numerical zero
 
 
 def test_D_cubic_thickness_scaling(mat):
-    # D ∝ h³: doubling ply thickness → 8× D
+    # D ~ h^3: doubling ply thickness -> 8x D
     lam1 = Laminate([Ply(mat, 0.125e-3, 0.0)] * 8)
     lam2 = Laminate([Ply(mat, 0.250e-3, 0.0)] * 8)
     ratio = lam2.D[0, 0] / lam1.D[0, 0]
@@ -62,7 +62,7 @@ def test_D_cubic_thickness_scaling(mat):
 
 
 def test_quasi_isotropic_A_matrix(mat, t):
-    # [0/+45/-45/90]s: A11 == A22 and A16 ≈ 0 (quasi-isotropic condition)
+    # [0/+45/-45/90]s: A11 == A22 and A16 ~= 0 (quasi-isotropic condition)
     lam = Laminate([Ply(mat, t, a) for a in [0, 45, -45, 90, 90, -45, 45, 0]])
     assert abs(lam.A[0, 0] - lam.A[1, 1]) / lam.A[0, 0] < 1e-6
     assert abs(lam.A[0, 2]) < 1.0
@@ -78,7 +78,7 @@ def test_zero_load_zero_strain(mat, t):
 def test_uniaxial_Nxx_gives_nonzero_strain(mat, t):
     lam = Laminate([Ply(mat, t, a) for a in [0, 45, -45, 90, 90, -45, 45, 0]])
     res = lam.response(N=np.array([-100e3, 0.0, 0.0]))
-    # Nxx < 0 → compressive strain in x → eps0[0] < 0
+    # Nxx < 0 -> compressive strain in x -> eps0[0] < 0
     assert res['eps0'][0] < 0
 
 
