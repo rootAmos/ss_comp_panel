@@ -1,7 +1,7 @@
 # flight_envelope.csv
 # Wing skin panel running loads for IM7/8552 [0/+45/-45/90]s sizing.
 # Wing: semi_span=4.5m  root_chord=4.0m  taper=0.25  sweep=50deg  MTOW=120kN
-# Loads from composite_panel aero model (Prandtl-Glauert / oblique-shock).
+# Loads from the current closed-form aero model (Prandtl-Glauert / Ackeret) plus gust reference cases.
 # Units: N [N/m],  M [N.m/m]
 # Columns: name, Nxx, Nyy, Nxy, Mxx, Myy, Mxy, source, eta, description
 #
@@ -15,25 +15,25 @@ M08_2p5g_root,-159716.6,-18345.0,25792.0,0,0,0,PrandtlGlauert,0.150,M0.8 cruise 
 M08_3p5g_root,-223603.3,-69974.8,40538.0,0,0,0,PrandtlGlauert,0.150,M0.8 low-alt 3.5g combat
 M17_2p5g_root,-159716.6,-17016.7,25659.2,0,0,0,Ackeret,0.150,M1.7 supersonic 2.5g
 M24_2p5g_root,-159716.6,-13399.9,25297.5,0,0,0,Ackeret,0.150,M2.4 supersonic 2.5g
-M50_2p5g_root,-159716.6,-19702.1,25927.7,0,0,0,Oblique,0.150,M5.0 hypersonic 2.5g
+M50_2p5g_root,-159716.6,-19702.1,25927.7,0,0,0,Ackeret,0.150,M5.0 high-speed 2.5g reference
 M06_gust_root,-127773.3,-30531.9,22219.2,0,0,0,Gust_CS25,0.150,M0.6 sea-level gust (CS-25 App.G)
 M08_1g_crs_root,-63886.6,0.0,9583.0,0,0,0,PrandtlGlauert,0.150,M0.8 1g cruise reference
-M15_1g_dash_root,-63886.6,-300000.0,39583.0,0,0,0,Oblique,0.150,M1.5 sea-level dash 1g alpha=10deg supersonic buffet limit load
+M15_1g_dash_root,-63886.6,-300000.0,39583.0,0,0,0,Ackeret,0.150,M1.5 sea-level dash 1g alpha=10deg supersonic reference load
 # -- Mid-span station  eta = 0.45 --------------------------------------------
 M08_2p5g_mid,-100376.9,-13694.2,16425.9,0,0,0,PrandtlGlauert,0.450,M0.8 cruise 2.5g maneuver
 M08_3p5g_mid,-140527.6,-52234.7,26302.6,0,0,0,PrandtlGlauert,0.450,M0.8 low-alt 3.5g combat
 M17_2p5g_mid,-100376.9,-12702.6,16326.8,0,0,0,Ackeret,0.450,M1.7 supersonic 2.5g
 M24_2p5g_mid,-100376.9,-10002.7,16056.8,0,0,0,Ackeret,0.450,M2.4 supersonic 2.5g
-M50_2p5g_mid,-100376.9,-14707.2,16527.2,0,0,0,Oblique,0.450,M5.0 hypersonic 2.5g
+M50_2p5g_mid,-100376.9,-14707.2,16527.2,0,0,0,Ackeret,0.450,M5.0 high-speed 2.5g reference
 M06_gust_mid,-80301.5,-22791.4,14324.4,0,0,0,Gust_CS25,0.450,M0.6 sea-level gust
 M08_1g_crs_mid,-40150.7,0.0,6022.6,0,0,0,PrandtlGlauert,0.450,M0.8 1g cruise reference
-M15_1g_dash_mid,-40150.7,-224000.0,28417.0,0,0,0,Oblique,0.450,M1.5 sea-level dash 1g alpha=10deg supersonic buffet limit load
+M15_1g_dash_mid,-40150.7,-224000.0,28417.0,0,0,0,Ackeret,0.450,M1.5 sea-level dash 1g alpha=10deg supersonic reference load
 # -- Tip station  eta = 0.75 -------------------------------------------------
 M08_2p5g_tip,-33228.2,-9043.3,5888.6,0,0,0,PrandtlGlauert,0.750,M0.8 cruise 2.5g maneuver
 M08_3p5g_tip,-46519.5,-34494.6,10427.4,0,0,0,PrandtlGlauert,0.750,M0.8 low-alt 3.5g combat
 M17_2p5g_tip,-33228.2,-8388.5,5823.1,0,0,0,Ackeret,0.750,M1.7 supersonic 2.5g
 M24_2p5g_tip,-33228.2,-6605.6,5644.8,0,0,0,Ackeret,0.750,M2.4 supersonic 2.5g
-M50_2p5g_tip,-33228.2,-9712.3,5955.5,0,0,0,Oblique,0.750,M5.0 hypersonic 2.5g
+M50_2p5g_tip,-33228.2,-9712.3,5955.5,0,0,0,Ackeret,0.750,M5.0 high-speed 2.5g reference
 M06_gust_tip,-26582.6,-15050.9,5492.5,0,0,0,Gust_CS25,0.750,M0.6 sea-level gust
 M08_1g_crs_tip,-13291.3,0.0,1993.7,0,0,0,PrandtlGlauert,0.750,M0.8 1g cruise reference
-M15_1g_dash_tip,-13291.3,-147900.0,16783.0,0,0,0,Oblique,0.750,M1.5 sea-level dash 1g alpha=10deg supersonic buffet limit load
+M15_1g_dash_tip,-13291.3,-147900.0,16783.0,0,0,0,Ackeret,0.750,M1.5 sea-level dash 1g alpha=10deg supersonic reference load

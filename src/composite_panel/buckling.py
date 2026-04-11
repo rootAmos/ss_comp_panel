@@ -212,6 +212,7 @@ def buckling_rf(N_applied: _np.ndarray, D: _np.ndarray,
     """Combined buckling RF via Whitney (1987) interaction: R_x + R_y + R_s^2 = 1.
     Uses Rayleigh-Ritz Ncr (M=5, N=2) that accounts for D16/D26 bend-twist coupling.
     Nemeth (2003), NASA/TP-2003-212131; Baucke & Mittelstedt (2015)."""
+    _check_bend_twist_coupling(D)
     Nxx, Nyy, Nxy = float(N_applied[0]), float(N_applied[1]), float(N_applied[2])
 
     Ncx  = _rr_Nxx_cr(D, a, b)
@@ -336,15 +337,13 @@ def _rr_Nyy_cr_smooth(D, a: float, b: float,
     Nemeth (2003), applied with coordinate swap."""
     D11, D12, D22, D66 = D[0, 0], D[0, 1], D[1, 1], D[2, 2]
     D16, D26           = D[0, 2], D[1, 2]
-    return _rr_Nxx_cr_smooth(
-        _np.array([[D22, D12, D26],
-                    [D12, D11, D16],
-                    [D26, D16, D66]]) if not hasattr(D, 'is_symbolic') else
-        type(D)([[D22, D12, D26],
-                  [D12, D11, D16],
-                  [D26, D16, D66]]),
-        b, a, m_modes, n_modes, eps,
-    )
+    # Swap axes: D_swap(i,j) maps xx<->yy for the transposed coordinate system.
+    # Build element-by-element so it works for both numpy and CasADi MX.
+    D_swap = D * 0.0          # preserve type (MX or ndarray), zero-fill
+    D_swap[0, 0] = D22;  D_swap[0, 1] = D12;  D_swap[0, 2] = D26
+    D_swap[1, 0] = D12;  D_swap[1, 1] = D11;  D_swap[1, 2] = D16
+    D_swap[2, 0] = D26;  D_swap[2, 1] = D16;  D_swap[2, 2] = D66
+    return _rr_Nxx_cr_smooth(D_swap, b, a, m_modes, n_modes, eps)
 
 
 def buckling_rf_smooth(Nxx, Nyy, Nxy, D, a: float, b: float,

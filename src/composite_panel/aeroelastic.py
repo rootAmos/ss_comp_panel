@@ -1,5 +1,5 @@
 """
-Iterative 1-D static aeroelastic solution for a tapered swept wing.
+Linear 1-D static aeroelastic solution for a tapered swept wing.
 
 Euler-Bernoulli cantilever with optional D16 bend-twist coupling for
 aeroelastic tailoring of unbalanced laminates.
@@ -38,6 +38,7 @@ class AeroelasticResult:
 
     def summary(self) -> str:
         sign = "? tip loads REDUCED (washout)" if self.aeroelastic_relief > 0 else "? tip loads INCREASED (divergence)"
+        solve_line = (f"  Linear solve      : {'converged' if self.converged else 'FAILED'}")
         return (
             f"Aeroelastic result:\n"
             f"  Rigid AoA        : {self.alpha_rigid:.2f}deg\n"
@@ -45,8 +46,7 @@ class AeroelasticResult:
             f"(Deltaalpha = {self.delta_alpha[-1]:+.2f}deg)\n"
             f"  Tip deflection   : {self.tip_deflection*100:.1f} cm\n"
             f"  Aeroelastic relief: {self.aeroelastic_relief*100:+.1f}%  {sign}\n"
-            f"  Iterations       : {self.n_iterations}  "
-            f"({'converged' if self.converged else 'NOT CONVERGED'})"
+            f"{solve_line}"
         )
 
 
@@ -175,7 +175,6 @@ def static_aeroelastic(
     alpha_rigid_deg:  float,
     n_load:           float,
     laminate_A11:     float,
-    laminate_h:       float,
     laminate_D16:     float = 0.0,
     laminate_D66:     Optional[float] = None,
     n_stations:       int   = 20,
@@ -183,7 +182,7 @@ def static_aeroelastic(
 ) -> AeroelasticResult:
     """One-shot linear aeroelastic solve via influence-matrix assembly.
 
-    For linear aero (Ackeret / Karman-Tsien) and linear structure
+    For linear aero (Prandtl-Glauert / Ackeret) and linear structure
     (Euler-Bernoulli), the aeroelastic system is:
         alpha_eff = alpha_rigid + A · alpha_eff
     solved as  (I - A) · alpha_eff = alpha_rigid · 1.
@@ -218,7 +217,7 @@ def static_aeroelastic(
             bt_ratio = np.where(np.abs(GJ) > 1e-30, EK / GJ, 0.0)
 
     # == Aerodynamic load sensitivity  S_deg[i] = d(q_lift_i)/d(alpha_deg) ====
-    # Both Ackeret and KT are linear in alpha, so evaluate at 1 deg.
+    # Both Prandtl-Glauert and Ackeret are linear in alpha, so evaluate at 1 deg.
     loads_unit = [
         wing_panel_loads(wing, etas[i], mach, altitude_m, 1.0, n_load)
         for i in range(n)
@@ -247,10 +246,15 @@ def static_aeroelastic(
     )
 
     # == Solve (I - A) · alpha_eff = alpha_rigid · 1 ==========================
-    alpha_eff = np.linalg.solve(
-        np.eye(n) - A,
-        np.full(n, alpha_rigid_deg),
-    )
+    try:
+        alpha_eff = np.linalg.solve(
+            np.eye(n) - A,
+            np.full(n, alpha_rigid_deg),
+        )
+        converged = True
+    except np.linalg.LinAlgError:
+        alpha_eff = np.full(n, alpha_rigid_deg)
+        converged = False
     delta_alpha_deg = alpha_eff - alpha_rigid_deg
 
     # == Recover deflection from converged alpha ===============================
@@ -287,7 +291,7 @@ def static_aeroelastic(
         loads_rigid       = loads_rigid,
         loads_elastic     = loads_elastic,
         n_iterations      = 1,
-        converged         = True,
+        converged         = converged,
         aeroelastic_relief= relief,
     )
 
@@ -307,7 +311,6 @@ if __name__ == "__main__":
     # IM7/8552 [0/45/-45/90]s 8-ply laminate (h ~ 1 mm)
     # Ex ~ 52 GPa  ->  A11 = Ex * h = 52e9 * 1e-3 = 52e6 N/m
     laminate_A11 = 52e6   # N/m
-    laminate_h   = 1.0e-3  # m
 
     result = static_aeroelastic(
         wing             = wing,
@@ -316,7 +319,6 @@ if __name__ == "__main__":
         alpha_rigid_deg  = 3.5,
         n_load           = 2.5,
         laminate_A11     = laminate_A11,
-        laminate_h       = laminate_h,
         n_stations       = 20,
         box_fraction     = 0.50,
     )

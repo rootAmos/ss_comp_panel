@@ -2,9 +2,9 @@
 Aerodynamic load generation for panel-level structural sizing.
 
 Pressure models:
-  - Karman-Tsien subsonic (M <= 0.85, capped at Cp_crit)
-  - Ackeret linearised supersonic (M >= 1.15)
-  - Modified Newtonian (hypersonic, standalone)
+  - Prandtl-Glauert subsonic (M <= 0.85)
+  - Ackeret linearised supersonic (1.15 <= M <= 5)
+  - Modified Newtonian hypersonic (M > 5)
   - Transonic (0.85 < M < 1.15): not supported -- raises ValueError
 
 All functions are CasADi-compatible: aerosandbox.numpy ops throughout,
@@ -91,7 +91,7 @@ def wing_panel_loads(
     rho, a_sound = _isa(altitude_m)
     q = 0.5 * rho * (mach * a_sound) ** 2
 
-    # Nyy  --  panel pressure (KT subsonic, Ackeret supersonic)
+    # Nyy  --  panel pressure (PG subsonic, Ackeret supersonic)
     delta_p = panel_pressure(mach, alpha_deg, q) * n_load
     b_panel = wing.stringer_pitch_m if wing.stringer_pitch_m is not None else c_loc
     Nyy = -delta_p * b_panel / 2.0
@@ -134,6 +134,18 @@ def wing_panel_loads(
 # 1.  Pressure models
 # ---------------------------------------------------------------------------
 
+def prandtl_glauert_panel_pressure(mach, alpha_deg, q_inf):
+    """Prandtl-Glauert linearised subsonic DeltaCp for a flat panel.
+
+    Uses the same flat-plate thin-airfoil coefficient form as the supersonic
+    Ackeret model, with beta = sqrt(1 - M^2).
+    """
+    beta     = np.sqrt(np.fmax(1.0 - mach ** 2, 1e-9))
+    alpha    = np.radians(alpha_deg)
+    delta_Cp = 4.0 * alpha / beta
+    return delta_Cp * q_inf
+
+
 def ackeret_panel_pressure(mach, alpha_deg, q_inf):
     """Ackeret linearised supersonic DeltaCp.  Ackeret (1925); Anderson (2003), Eq. 9.36."""
     beta     = np.sqrt(np.fmax(mach ** 2 - 1.0, 1e-6))
@@ -161,34 +173,96 @@ def hypersonic_panel_pressure(mach, alpha_deg, q_inf, gamma: float = 1.4):
     return delta_Cp * q_inf
 
 
-_M_SUB_MAX = 0.85   # Karman-Tsien valid below this
+_M_SUB_MAX = 0.85   # Prandtl-Glauert valid below this
 _M_SUP_MIN = 1.15   # Ackeret valid above this
 
 
-def _cp_crit(mach, gamma: float = 1.4):
-    """Critical Cp (local sonic condition).  Anderson (2003), Eq. 11.38."""
-    g    = gamma
-    M2   = mach ** 2
-    base = (2.0 / (g + 1.0)) * (1.0 + (g - 1.0) / 2.0 * M2)
-    return (2.0 / (g * M2)) * (base ** (g / (g - 1.0)) - 1.0)
+def oblique_shock_panel_pressure(mach, alpha_deg, q_inf, gamma: float = 1.4):
+    """
+    Thin-panel oblique-shock / expansion estimate [Pa] used for validation.
 
+    The main sizing path uses Ackeret for smooth supersonic derivatives. This
+    helper exists to benchmark Ackeret against a more nonlinear reference.
+    Accepts broadcastable scalar or array-like inputs.
+    """
+    from scipy.optimize import root
 
-def _kt_delta_cp(alpha_rad, mach, gamma: float = 1.4):
-    """Karman-Tsien compressibility correction for flat-plate DeltaCp, capped at Cp_crit.
-    Anderson (2003), Eq. 11.54; von Karman (1941), J. Aeronautical Sciences."""
-    Cp0   = 2.0 * np.pi * alpha_rad
-    beta  = np.sqrt(np.fmax(1.0 - mach ** 2, 1e-9))
-    denom = np.fmax(beta + mach ** 2 * Cp0 / (2.0 * (1.0 + beta)), 1e-12)
-    Cp_kt = Cp0 / denom
-    Cp_cap = -2.0 * _cp_crit(mach, gamma)   # positive upper bound
-    return np.fmin(Cp_kt, Cp_cap)
+    mach_arr, alpha_arr, q_arr, gamma_arr = np.broadcast_arrays(
+        np.asarray(mach, dtype=float),
+        np.asarray(alpha_deg, dtype=float),
+        np.asarray(q_inf, dtype=float),
+        np.asarray(gamma, dtype=float),
+    )
+
+    if np.any(mach_arr <= 1.0):
+        raise ValueError("oblique_shock_panel_pressure requires Mach > 1.0")
+
+    out = np.zeros(mach_arr.shape, dtype=float)
+    active = np.abs(alpha_arr) >= 1e-12
+    if not np.any(active):
+        return float(out[()]) if out.shape == () else out
+
+    mach_v = mach_arr[active]
+    alpha_v = alpha_arr[active]
+    q_v = q_arr[active]
+    gamma_v = gamma_arr[active]
+
+    theta = np.abs(np.radians(alpha_v))
+    beta_lo = np.arcsin(1.0 / mach_v) + 1e-6
+    beta_hi = np.pi / 2.0 - 1e-6
+    span = beta_hi - beta_lo
+
+    def _sigmoid(z):
+        return 1.0 / (1.0 + np.exp(-z))
+
+    def _beta_from_z(z):
+        return beta_lo + span * _sigmoid(z)
+
+    def _residual(z):
+        beta = _beta_from_z(z)
+        sin_beta = np.sin(beta)
+        numer = 2.0 / np.tan(beta) * (mach_v**2 * sin_beta**2 - 1.0)
+        denom = mach_v**2 * (gamma_v + np.cos(2.0 * beta)) + 2.0
+        return np.tan(theta) - numer / denom
+
+    beta0 = np.clip(beta_lo + theta + 0.05, beta_lo + 1e-6, beta_hi - 1e-6)
+    frac0 = np.clip((beta0 - beta_lo) / span, 1e-9, 1.0 - 1e-9)
+    z0 = np.log(frac0 / (1.0 - frac0))
+
+    sol = root(_residual, z0, method="hybr")
+    beta = _beta_from_z(sol.x)
+    res_norm = np.abs(_residual(sol.x))
+
+    failed = (~np.isfinite(beta)) | (res_norm > 1e-8)
+    mn1 = mach_v * np.sin(beta)
+    p2_p1 = 1.0 + 2.0 * gamma_v / (gamma_v + 1.0) * (mn1**2 - 1.0)
+
+    # Linearized leeward expansion keeps the low-alpha comparison stable.
+    delta_cp_expansion = -2.0 * theta / np.sqrt(np.maximum(mach_v**2 - 1.0, 1e-12))
+    p3_p1 = 1.0 + delta_cp_expansion * q_v / np.maximum(q_v, 1e-12)
+    delta_p = (p2_p1 - p3_p1) * q_v / (0.5 * gamma_v * mach_v**2)
+
+    # Fall back to the linearized supersonic model only for unconverged entries.
+    if np.any(failed):
+        delta_p = np.where(
+            failed,
+            ackeret_panel_pressure(mach_v, alpha_v, q_v),
+            delta_p,
+        )
+
+    out[active] = np.sign(alpha_v) * delta_p
+
+    return float(out[()]) if out.shape == () else out
 
 
 def panel_pressure(mach, alpha_deg, q_inf, gamma: float = 1.4):
     """
-    Panel pressure [Pa].  KT subsonic (M <= 0.85), Ackeret supersonic (M >= 1.15).
+    Panel pressure [Pa].  Prandtl-Glauert subsonic (M <= 0.85),
+    Ackeret supersonic (1.15 <= M <= 5), Modified Newtonian hypersonic (M > 5).
     Raises ValueError in the transonic gap -- no valid closed-form model exists there.
     """
+    if mach > 5.0:
+        return hypersonic_panel_pressure(mach, alpha_deg, q_inf, gamma)
     if _M_SUB_MAX < mach < _M_SUP_MIN:
         raise ValueError(
             f"Mach {mach:.3f} is in the transonic regime "
@@ -196,8 +270,7 @@ def panel_pressure(mach, alpha_deg, q_inf, gamma: float = 1.4):
             f"No valid closed-form pressure model implemented for this regime in this model."
         )
     if mach <= _M_SUB_MAX:
-        alpha = np.radians(alpha_deg)
-        return _kt_delta_cp(alpha, mach, gamma) * q_inf
+        return prandtl_glauert_panel_pressure(mach, alpha_deg, q_inf)
     else:
         return ackeret_panel_pressure(mach, alpha_deg, q_inf)
 

@@ -33,6 +33,7 @@ import numpy as np
 _GREEN = "\033[92m"; _RED = "\033[91m"; _RESET = "\033[0m"; _BOLD = "\033[1m"
 
 _results = []
+_block_errors = []
 
 def _check(name: str, condition: bool, detail: str = "", tol_pct: float = None):
     status = "PASS" if condition else "FAIL"
@@ -54,6 +55,13 @@ def _section(title: str):
 def _pct(got, ref):
     """Percentage deviation from reference."""
     return abs(got - ref) / abs(ref) * 100
+
+
+def _block_error(title: str, exc: Exception):
+    print(f"  {_RED}ERROR{_RESET}")
+    traceback.print_exc()
+    _results.append((title, False))
+    _block_errors.append((title, exc))
 
 
 # ==============================================================================
@@ -88,8 +96,8 @@ try:
            abs(m.nu21 - nu21_computed) < 1e-12,
            f"nu21={m.nu21:.6f}, expected {nu21_computed:.6f}")
 
-except Exception:
-    print(f"  {_RED}ERROR{_RESET}"); traceback.print_exc()
+except Exception as exc:
+    _block_error("Block 1", exc)
 
 
 # ==============================================================================
@@ -164,8 +172,8 @@ try:
            _pct(A11_got, A11_ref) < 0.1,
            f"A11_got={A11_got/1e6:.3f} MN/m,  ref {A11_ref/1e6:.3f} MN/m")
 
-except Exception:
-    print(f"  {_RED}ERROR{_RESET}"); traceback.print_exc()
+except Exception as exc:
+    _block_error("Block 2", exc)
 
 
 # ==============================================================================
@@ -204,8 +212,8 @@ try:
            _pct(rf_half, 2 * rf_full) < 2.0,
            f"RF(0.5xF1t)={rf_half:.4f},  2xRF(F1t)={2*rf_full:.4f}")
 
-except Exception:
-    print(f"  {_RED}ERROR{_RESET}"); traceback.print_exc()
+except Exception as exc:
+    _block_error("Block 3", exc)
 
 
 # ==============================================================================
@@ -261,8 +269,8 @@ try:
            Ncr_narrow > Ncr_0_model,
            f"b={b*100:.0f}cm: {Ncr_0_model/1e3:.2f} kN/m  ->  b={b/2*100:.0f}cm: {Ncr_narrow/1e3:.2f} kN/m")
 
-except Exception:
-    print(f"  {_RED}ERROR{_RESET}"); traceback.print_exc()
+except Exception as exc:
+    _block_error("Block 4", exc)
 
 
 # ==============================================================================
@@ -272,37 +280,49 @@ _section("Block 5  --  Aerodynamic pressure model cross-checks")
 
 try:
     from composite_panel.aero_loads import (
-        panel_pressure, oblique_shock_panel_pressure,
+        panel_pressure,
+        prandtl_glauert_panel_pressure,
+        ackeret_panel_pressure,
+        hypersonic_panel_pressure,
     )
 
     gamma = 1.4
 
-    # -- 5a  Ackeret analytic vs oblique_shock_panel_pressure at small AoA --------
-    # At M=1.5, alpha=3deg: Ackeret gives DeltaCp = 4alpha/sqrt(M^2-1)
-    # Oblique shock should agree within ~10% (thin-airfoil regime)
+    # -- 5a  Subsonic: panel_pressure should match Prandtl-Glauert ----------
+    # At M=0.6, alpha=3deg: DeltaCp = 4alpha/sqrt(1-M^2)
+    M_sub = 0.6
+    alpha_deg = 3.0
+    q_sub = 0.5 * 1.225 * (M_sub * 340.0) ** 2
+    dp_pg_ref = prandtl_glauert_panel_pressure(M_sub, alpha_deg, q_sub)
+    dp_pg_model = panel_pressure(M_sub, alpha_deg, q_sub, gamma)
+    _check("M=0.6 alpha=3deg: panel_pressure matches Prandtl-Glauert",
+           _pct(dp_pg_model, dp_pg_ref) < 1.0,
+           f"model {dp_pg_model/1e3:.4f} kPa,  PG {dp_pg_ref/1e3:.4f} kPa",
+           tol_pct=1.0)
+
+    # -- 5b  Supersonic: panel_pressure should route to Ackeret --------------
     M, alpha_deg = 1.5, 3.0
-    alpha_rad = math.radians(alpha_deg)
     rho  = 0.0347   # kg/m^3 at 25.9 km ISA (SR-71 Blackbird cruise, 85,000 ft)
     a_s  = 295.1    # m/s  speed of sound at 25.9 km ISA (T=216.65 K, isothermal above 11 km)
     q    = 0.5 * rho * (M * a_s)**2
 
-    dCp_ackeret = 4 * alpha_rad / math.sqrt(M**2 - 1)
-    dp_ackeret  = dCp_ackeret * q
-
-    dp_oblique = oblique_shock_panel_pressure(M, alpha_deg, q, gamma)
     dp_panel   = panel_pressure(M, alpha_deg, q, gamma)
+    dp_ackeret = ackeret_panel_pressure(M, alpha_deg, q)
 
-    _check("M=1.5 alpha=3deg: oblique_shock within 10% of Ackeret",
-           _pct(dp_oblique, dp_ackeret) < 10.0,
-           f"oblique {dp_oblique/1e3:.3f} kPa,  Ackeret {dp_ackeret/1e3:.3f} kPa,  "
-           f"dev {_pct(dp_oblique, dp_ackeret):.1f}%",
-           tol_pct=10.0)
+    _check("M=1.5 alpha=3deg: panel_pressure matches Ackeret",
+           _pct(dp_panel, dp_ackeret) < 0.1,
+           f"panel_pressure={dp_panel/1e3:.4f} kPa,  Ackeret={dp_ackeret/1e3:.4f} kPa")
 
-    _check("panel_pressure(M=1.5) routes to oblique_shock",
-           _pct(dp_panel, dp_oblique) < 0.1,
-           f"panel_pressure={dp_panel/1e3:.4f} kPa,  oblique={dp_oblique/1e3:.4f} kPa")
+    # -- 5c  Hypersonic: panel_pressure should route to Modified Newtonian ----
+    M_hyp = 5.1
+    q_hyp = 0.5 * rho * (M_hyp * a_s) ** 2
+    dp_hyp = panel_pressure(M_hyp, alpha_deg, q_hyp, gamma)
+    dp_mn  = hypersonic_panel_pressure(M_hyp, alpha_deg, q_hyp, gamma)
+    _check("M=5.1 alpha=3deg: panel_pressure matches Modified Newtonian",
+           _pct(dp_hyp, dp_mn) < 0.1,
+           f"panel_pressure={dp_hyp/1e3:.4f} kPa,  MN={dp_mn/1e3:.4f} kPa")
 
-    # -- 5b  Higher Mach -> higher pressure (monotonicity) -------------------------
+    # -- 5d  Higher Mach -> higher pressure (monotonicity) -------------------------
     # Each Mach has its own dynamic pressure (same altitude 25.9 km, rho=0.0347, a=295.1)
     # At fixed altitude: q = 0.5*rho*(M*a)^2 ~ M^2  --  this is the physically correct comparison
     def _q(M_): return 0.5 * rho * (M_ * a_s)**2
@@ -313,29 +333,18 @@ try:
            dp_17 < dp_24 < dp_50,
            f"M1.7:{dp_17/1e3:.2f}  M2.4:{dp_24/1e3:.2f}  M5.0:{dp_50/1e3:.2f} kPa")
 
-    # -- 5c  Sign check: DeltaCp (differential windward - leeward) should be positive --
+    # -- 5e  Sign check: DeltaCp (differential windward - leeward) should be positive --
     _check("M=2.4 alpha=3deg: DeltaCp > 0  (windward above leeward pressure)",
            panel_pressure(2.4, alpha_deg, q, gamma) > 0)
 
-    # -- 5d  alpha=0deg -> no net lift force (DeltaCp = 0) ----------------------------------
+    # -- 5f  alpha=0deg -> no net lift force (DeltaCp = 0) ----------------------------------
     dp_zero_alpha = panel_pressure(2.4, 0.0, q, gamma)
     _check("alpha=0deg: DeltaCp = 0  (no net pressure at zero incidence)",
            abs(dp_zero_alpha) < 1.0,   # within 1 Pa
            f"DeltaP(alpha=0) = {dp_zero_alpha:.4f} Pa")
 
-    # -- 5e  Subsonic: Prandtl-Glauert vs analytic DeltaCp = 4alpha/sqrt(1-M^2) --------------
-    M_sub = 0.6
-    q_sub = 0.5 * 1.225 * (M_sub * 340)**2
-    dCp_pg_analytic = 4 * alpha_rad / math.sqrt(1 - M_sub**2)
-    dp_pg_model     = panel_pressure(M_sub, alpha_deg, q_sub, gamma)
-    dp_pg_ref       = dCp_pg_analytic * q_sub
-    _check("M=0.6 alpha=3deg: panel_pressure within 1% of Prandtl-Glauert formula",
-           _pct(dp_pg_model, dp_pg_ref) < 1.0,
-           f"model {dp_pg_model/1e3:.4f} kPa,  PG analytic {dp_pg_ref/1e3:.4f} kPa",
-           tol_pct=1.0)
-
-except Exception:
-    print(f"  {_RED}ERROR{_RESET}"); traceback.print_exc()
+except Exception as exc:
+    _block_error("Block 5", exc)
 
 
 # ==============================================================================
@@ -388,8 +397,8 @@ try:
            0.1e-3 < h_total < 5e-3,
            f"h_total = {h_total*1e3:.3f} mm")
 
-except Exception:
-    print(f"  {_RED}ERROR{_RESET}"); traceback.print_exc()
+except Exception as exc:
+    _block_error("Block 6", exc)
 
 
 # ==============================================================================
@@ -454,8 +463,8 @@ try:
            r30.total_skin_mass > r25.total_skin_mass,
            f"2.5g: {r25.total_skin_mass:.1f} kg  ->  3.0g: {r30.total_skin_mass:.1f} kg")
 
-except Exception:
-    print(f"  {_RED}ERROR{_RESET}"); traceback.print_exc()
+except Exception as exc:
+    _block_error("Block 7", exc)
 
 
 # ==============================================================================
@@ -472,6 +481,8 @@ print(f"  Total checks : {n_total}")
 print(f"  {_GREEN}Passed{_RESET}       : {n_pass}")
 if n_fail:
     print(f"  {_RED}Failed{_RESET}       : {n_fail}")
+    if _block_errors:
+        print(f"  {_RED}Block errors{_RESET} : {len(_block_errors)}")
     print(f"\n  Failed checks:")
     for name, ok in _results:
         if not ok:
@@ -479,3 +490,6 @@ if n_fail:
 else:
     print(f"  {_GREEN}All checks passed  --  model is self-consistent.{_RESET}")
 print(f"{'='*60}\n")
+
+if n_fail:
+    raise SystemExit(1)

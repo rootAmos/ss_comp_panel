@@ -750,6 +750,9 @@ def optimize_laminate_aeroelastic(
     mat:              PlyMaterial,
     angles_half_deg:  List[float],
     wing:             "WingGeometry",
+    mach:             float,
+    altitude_m:       float,
+    alpha_rigid_deg:  float,
     n_load:           float,
     relief_min_deg:   float,
     use_bt_coupling:  bool  = True,
@@ -844,48 +847,77 @@ def optimize_laminate_aeroelastic(
         )
         opti.subject_to(RF_buckle >= buckle_rf_min)
 
-    # == Aeroelastic washout constraint (CasADi-native) ========================?
+    # == Aeroelastic washout constraint (influence-matrix, CasADi-native) =======
     #
-    # Wing-box dimensions at root chord (constant, not design variables):
-    #   b_box = box_fraction * c_root  [m]
-    #   h_box = t_over_c    * c_root  [m]
+    # Same physics as static_aeroelastic(): strip-theory loads, Euler-Bernoulli
+    # bending, sweep + D16 washout.  Precompute concrete matrices (S_deg, W, T,
+    # geometric stiffness factors), then build CasADi influence matrix from
+    # A11, D16, D66 and solve (I - A)·alpha_eff = alpha_rigid·1.
     #
-    # Bending, torsional, and coupling stiffnesses from CLT:
-    #   EI    = 2 * A11 * b_box * (h_box/2)^2   [N*m^2]  (A11=E_eff*h cancels h)
-    #   GJ    = 4 * D66 * b_box                  [N*m^2]
-    #   EK    = 2 * D16 * b_box                  [N*m^2]  (zero for balanced)
+    # Ref: Bisplinghoff, Ashley & Halfman (1955), Ch. 8; Weisshaar (1981).
     #
-    # Tip slope (elliptic spanwise lift, derived via double integration):
-    #   theta_tip = W_semi * L^2 / (8 * EI)     [rad]
-    #   Derivation: for q(y)=q0*sqrt(1-(y/L)^2), integral q*y^2/2 dy over [0,L]
-    #   gives theta_tip = (pi*q0*L^3/32)/EI = W*L^2/(8*EI)  (exact for elliptic).
-    #
-    # Total tip washout (sweep geometry + bend-twist coupling):
-    #   Deltaalpha_tip = ?theta_tip * (tan Lambda + EK/GJ)  [rad]
-    #
-    # Constraint: Deltaalpha_tip [deg] <= ?|relief_min_deg|
-    #
-    c_root    = wing.root_chord
-    b_box     = box_fraction * c_root
-    h_box     = wing.t_over_c * c_root
-    L         = wing.semi_span
-    W_semi    = wing.mtow_n * n_load * 0.5
+    from composite_panel.aeroelastic import (
+        _build_moment_matrix, _build_cumtrap_matrix,
+    )
+
+    n_ae  = 15                                          # spanwise stations for CasADi solve
+    etas  = _np.linspace(0.02, 0.98, n_ae)
+    y_ae  = etas * wing.semi_span                       # [m]
+    c_ae  = _np.array([float(wing.chord(e)) for e in etas])
+
     tan_sweep = _math.tan(_math.radians(wing.sweep_le_deg))
 
-    A11       = A_mat[0, 0]                                  # CasADi expression
-    D16       = D_mat[0, 2]                                  # zero for balanced
+    # Aerodynamic load sensitivity (concrete): d(q_lift)/d(alpha_deg) at each station
+    loads_unit = [
+        wing_panel_loads(wing, etas[i], mach, altitude_m, 1.0, n_load)
+        for i in range(n_ae)
+    ]
+    S_deg = _np.array([
+        -2.0 * loads_unit[i].Nyy / max(c_ae[i], 1e-3)
+        for i in range(n_ae)
+    ])                                                   # [N/m per degree]
+
+    # Structural matrices (concrete)
+    W_ae = _build_moment_matrix(y_ae)                    # moment from load
+    T_ae = _build_cumtrap_matrix(y_ae)                   # slope from curvature
+
+    # Geometric stiffness factor: EI(eta) = A11 * f_EI(eta)
+    #   where f_EI = 2 * box_fraction * chord * (t_over_c * chord / 2)^2
+    f_EI = _np.array([
+        2.0 * box_fraction * c_ae[i] * (wing.t_over_c * c_ae[i] * 0.5) ** 2
+        for i in range(n_ae)
+    ])                                                   # EI = A11 * f_EI
+
+    # Precompute the concrete part of the influence matrix:
+    #   M_pre = T · diag(1/f_EI) · W · diag(S_deg)
+    M_pre = T_ae @ _np.diag(1.0 / _np.maximum(f_EI, 1e-30)) @ W_ae @ _np.diag(S_deg)
+
+    # CasADi stiffness variables
+    A11       = A_mat[0, 0]
+    D16       = D_mat[0, 2]
     D66       = D_mat[2, 2]
 
-    EI        = 2.0 * A11 * b_box * (h_box * 0.5) ** 2      # [N*m^2]
-    GJ        = 4.0 * D66 * b_box                            # [N*m^2]
-    EK        = 2.0 * D16 * b_box                            # [N*m^2]
+    # Bend-twist ratio: EK/GJ = (2*D16*b_box)/(4*D66*b_box) = D16/(2*D66)
+    bt_ratio = D16 / (2.0 * D66 + 1e-6)
 
-    theta_tip = W_semi * L ** 2 / (8.0 * (EI + 1e-3))       # [rad]  eps for stability
-    bt_ratio  = EK / (GJ + 1e-6)
-    delta_alpha_rad = -theta_tip * (tan_sweep + bt_ratio)
-    delta_alpha_deg_expr = delta_alpha_rad * (180.0 / _math.pi)
+    # Washout factor: -(tan_sweep + bt_ratio) * (180/pi) / A11
+    washout_scalar = -(tan_sweep + bt_ratio) * (180.0 / _math.pi)
+
+    # Full influence matrix: A = (washout_scalar / A11) * M_pre
+    # System: (I - A) · alpha_eff = alpha_rigid · 1
+    A_inf = (washout_scalar / (A11 + 1e-6)) * M_pre
+    alpha_eff = np.linalg.solve(
+        _np.eye(n_ae) - A_inf,
+        _np.full(n_ae, alpha_rigid_deg),
+    )
+    delta_alpha_deg_expr = alpha_eff[-1] - alpha_rigid_deg  # tip washout [deg]
 
     opti.subject_to(delta_alpha_deg_expr <= -abs(relief_min_deg))
+
+    # Keep scalar stiffness expressions for reporting
+    EI = A11 * f_EI[0]                                   # root EI for summary
+    GJ = 4.0 * D66 * box_fraction * wing.root_chord
+    EK = 2.0 * D16 * box_fraction * wing.root_chord
 
     # == Objective ============================================================?
     opti.minimize(rho_kg_m3 * 2.0 * sum(t_list))

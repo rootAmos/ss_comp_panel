@@ -1,23 +1,24 @@
 # composite_panel
 
-A Python toolkit for preliminary sizing of composite wing skin panels on high-speed airframes. Given material properties and design constraints, it determines the ply angles and thicknesses that minimise panel mass while satisfying strength, buckling, and  --  optionally  --  aeroelastic requirements.
+A self-study Python toolkit for preliminary sizing of composite wing skin panels on high-speed airframes. I built it to teach myself Classical Laminate Theory, composite failure/buckling checks, and how those pieces connect to small engineering optimization workflows in code.
 
-Aerodynamic loads can be pulled from an external source (CSV, CFD, VLM) or computed directly from flight conditions. 
+Loads can be pulled from external sources (CSV, CFD, VLM) or computed directly from flight conditions using closed-form panel pressure models.
 
-Pressure distributions are integrated over the airfoil surface using the appropriate theory for the speed regime: Prandtl-Glauert for subsonic flight, Ackeret linearised theory for supersonic, and Modified Newtonian impact theory for hypersonic. 
+The active running-load path uses Prandtl-Glauert for subsonic flight, Ackeret linearised theory for supersonic flight, and switches to Modified Newtonian above Mach 5.
 
 The resulting running loads feed into Classical Laminate Theory to recover ply-level stresses, which are checked against failure criteria (Tsai-Wu, Hashin, max-stress) and a panel buckling margin. A CasADi/IPOPT gradient-based optimizer then sizes the laminate across all load cases simultaneously.
+
 
 ```mermaid
 graph TD
     FC[Flight conditions] --> regime{Speed regime}
-    regime -->|M less than 1| PG[Prandtl-Glauert]
-    regime -->|1 to 5| AC[Ackeret supersonic]
+    regime -->|M less than 0.85| PG[Prandtl-Glauert]
+    regime -->|1.15 to 5| AC[Ackeret supersonic]
     regime -->|M greater than 5| MN[Modified Newtonian]
     PG --> RL[Running loads: Nxx Nyy Nxy Mxx]
     AC --> RL
     MN --> RL
-    DB[(Loads database - CSV / CFD / VLM)] --> RL
+    DB[(Load cases - CSV / CFD / VLM)] --> RL
 
     MAT[Material properties] --> CLT[CLT - ABD matrix]
     TH[Thermal loads] --> CLT
@@ -46,8 +47,8 @@ src/composite_panel/
 |-- failure.py                 --  Tsai-Wu, Tsai-Hill, Hashin, max-stress, max-strain
 |-- buckling.py                --  panel buckling RF under combined Nxx/Nyy/Nxy
 |-- thermal.py                 --  CTE transforms, thermal resultants, aero heating
-|-- aero_loads.py              --  Ackeret/Prandtl-Glauert/Newtonian pressure to running loads
-|-- loads_db.py                --  LoadCase, LoadsDatabase (from_csv, to_csv, filter, envelope)
+|-- aero_loads.py              --  Prandtl-Glauert / Ackeret / Modified Newtonian pressure to running loads
+|-- loads_db.py                --  LoadCase, LoadsDatabase (CSV-backed collection)
 |-- trim.py                    --  flight mechanics trim (alpha, CL, q) across Mach range
 |-- aeroelastic.py             --  static aeroelastic correction (Euler-Bernoulli + washout)
 |-- lamination_parameters.py   --  LPs, stiffness polars, LP feasibility domain, BTC/SEC indices
@@ -55,9 +56,7 @@ src/composite_panel/
 
 scripts/                               all plots written to outputs/
 |-- validate_model.py                   --  run first: regression checks against 7 analytical benchmarks
-|-- 01_demo_supersonic_panel.py         --  per-ply stress bars + stacking-sequence trade for a single supersonic panel
-|-- 02_demo_wing_skin_mdo.py            --  spanwise wing-skin sizing; two layup families; ply thickness heatmap
-+-- 03_demo_lamination_params.py        --  stiffness polars, LP feasibility domain, LP reconstruction check
++-- flight_envelope.csv                 --  reference load cases for multicase sizing examples
 
 tests/
 |-- test_basics.py
@@ -74,7 +73,7 @@ notebooks/                             read in order; each builds on the previou
 |-- 02_tutorial_multicase_sizing.ipynb      --  multi-case NLP from a real flight envelope
 |-- 03_tutorial_hypersonic_wing.ipynb       --  adiabatic wall temperature, thermal resultants, Mach 0.8-5 sizing
 |-- 04_tutorial_aeroelastic_tailoring.ipynb --  D16 bend-twist coupling; strength + washout in one IPOPT solve
-+-- 05_tutorial_sensitivity.ipynb           --  parametric sweeps of n_load and Mach; logarithmic sensitivity
++-- 05_tutorial_sensitivity.ipynb           --  parametric sweeps of n_load and Mach
 ```
 
 ---
@@ -89,6 +88,17 @@ Core dependencies (`numpy`, `matplotlib`, `aerosandbox`) are declared in `pyproj
 
 ---
 
+## Limitations
+
+- This is a panel-level preliminary-analysis model, not a full wing-box structural model.
+- Spanwise loads use closed-form/strip-theory assumptions and are not a substitute for a full loads process.
+- The transonic regime is intentionally unsupported.
+- The aeroelastic treatment is a simplified linear static model intended for intuition and trade studies.
+- The `LoadsDatabase` module is a CSV-backed collection for examples and small studies, not a production data system.
+- The validation here is against analytical checks and internal consistency tests; it should not be interpreted as certification-grade verification.
+
+---
+
 ## Testing and validation
 
 ### Unit tests
@@ -97,7 +107,7 @@ Core dependencies (`numpy`, `matplotlib`, `aerosandbox`) are declared in `pyproj
 pytest tests/
 ```
 
-67 tests across CLT, failure criteria (Tsai-Wu, Hashin, max-stress), buckling (including bend-twist coupling detection), input parsing, and basic integration checks.
+68 tests across CLT, failure criteria (Tsai-Wu, Hashin, max-stress), buckling (including bend-twist coupling detection), input parsing, and basic integration checks.
 
 ### Analytical validation
 
@@ -113,8 +123,8 @@ Checks the implementation against known analytical results across 7 blocks:
 | 2 | CLT limit cases: A11 exact formula, B=0 for symmetric layups, quasi-isotropic symmetry | Jones (1999) |
 | 3 | Tsai-Wu RF = 1.0 at each uniaxial failure boundary; linear scaling with load | Tsai & Wu (1971) |
 | 4 | Nxx_cr matches Timoshenko closed form for [0]8; cubic h^3 scaling | Timoshenko & Gere (1961) |
-| 5 | Ackeret dCp within 10% of oblique shock at M=1.5; Prandtl-Glauert at M=0.6 | Ackeret (1925) |
-| 6 | Optimizer KKT: RF at optimum equals rf_min (active constraint) |  --  |
+| 5 | Supersonic Ackeret check at M=1.5; subsonic Prandtl-Glauert check at M=0.6 | Ackeret (1925) |
+| 6 | Optimizer result satisfies the RF target at optimum |  --  |
 | 7 | Physics monotonicity: mass increases with Mach and load factor; root thicker than tip |  --  |
 
 ---

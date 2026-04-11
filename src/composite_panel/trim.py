@@ -34,7 +34,7 @@ class TrimState:
         return (f"TrimState  M={self.mach:.2f}  alt={self.altitude_m/1e3:.0f}km  "
                 f"n={self.n_load:.2f}g  alpha={self.alpha_deg:.2f}deg  "
                 f"CL={self.CL:.4f}  CLalpha={self.CLalpha:.3f}/rad  "
-                f"q?={self.q_inf/1e3:.2f}kPa  S={self.S_ref:.2f}m^2")
+                f"q_inf={self.q_inf/1e3:.2f}kPa  S={self.S_ref:.2f}m^2")
 
 
 
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     # Sweep across mission profile
     mach_range = [0.6, 0.8, 1.2, 1.5, 1.7, 2.0, 2.5]
     print("Trim table  --  15 km, 1g cruise:")
-    print(f"  {'M':>5}  {'alpha (deg)':>8}  {'CL':>8}  {'CLalpha (1/rad)':>12}  {'q? (kPa)':>10}")
+    print(f"  {'M':>5}  {'alpha (deg)':>8}  {'CL':>8}  {'CLalpha (1/rad)':>12}  {'q_inf (kPa)':>12}")
     for s in trim_table(wing, mach_range, altitude_m=15_000.0, n_load=1.0):
         print(f"  {s.mach:5.2f}  {s.alpha_deg:8.3f}  {s.CL:8.4f}  "
               f"{s.CLalpha:12.4f}  {s.q_inf/1e3:10.2f}")

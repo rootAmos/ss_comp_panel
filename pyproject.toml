@@ -12,6 +12,7 @@ license         = { text = "MIT" }
 
 dependencies = [
     "numpy>=1.24",
+    "scipy>=1.10",
     "aerosandbox>=4.0",
     "matplotlib>=3.7",
 ]

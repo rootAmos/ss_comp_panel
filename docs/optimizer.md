@@ -173,10 +173,9 @@ balance constraints are lifted, allowing D16 != 0.
 Wing-box stiffnesses are expressed directly from the CasADi A/D matrices:
 
 ```
-E_eff = A_1_1 / h_total            [Pa]
-EI    = 2 * E_eff * b_box * (h_box/2)^2   [N*m^2]   (bending)
-GJ    = 4 * D_6_6 * b_box                  [N*m^2]   (torsional)
-EK    = 2 * D_1_6 * b_box                  [N*m^2]   (bend-twist coupling)
+EI = A_1_1 * 2 * box_fraction * c_root * (t_over_c * c_root / 2)^2  [N*m^2]
+GJ = 4 * D_6_6 * box_fraction * c_root                               [N*m^2]
+EK = 2 * D_1_6 * box_fraction * c_root                               [N*m^2]
 ```
 
 Tip slope (elliptic lift distribution, exact closed-form):
@@ -217,8 +216,9 @@ washout. The optimizer can therefore achieve the required Deltaalpha_tip at **hi
 EI (thicker, stronger panels) than the geometry-only case, reducing the mass
 penalty from the aeroelastic constraint.
 
-The `demo_aeroelastic_tailoring.py` script shows the three-case comparison:
-strength-only baseline (+0%), geometry washout (+33%), bend-twist coupled (+18%).
+The `notebooks/04_tutorial_aeroelastic_tailoring.ipynb` notebook shows the
+three-case comparison: strength-only baseline, geometry washout, and
+bend-twist coupled tailoring.
 
 ### Data flow
 
@@ -243,25 +243,11 @@ optimize_laminate_aeroelastic(N, M, mat, angles, wing, n_load, relief_min)
 
 ## Sensitivity analysis
 
-The parametric sensitivity of optimal mass to any flight parameter is available
-analytically from the solved KKT conditions  --  one solve yields N sensitivities:
-
-```
-d(m*)/d(n_load)   --  load factor sensitivity
-d(m*)/d(Mach)     --  Mach sensitivity
-```
-
-`demo_sensitivity.py` builds explicit sweep curves across n_load in [1.5, 4.0]g
-and Mach in [1.4, 4.0] and annotates the slope at the nominal design point.
-Normalised log-log sensitivities at the nominal point (n=2.5g, M=2.4, Alt=25.9km):
-
-| Parameter | d(ln m*)/d(ln p) | Interpretation |
-|---|---|---|
-| n_load | 0.40 | Doubling load factor -> +33% mass |
-| Mach | 0.16 | Doubling Mach -> +12% mass |
-
-Load factor dominates; Mach matters primarily above M3.5 where dynamic
-pressure growth accelerates.
+There is no general post-solve KKT sensitivity API in the current codebase.
+The `notebooks/05_tutorial_sensitivity.ipynb` notebook explores the response
+of optimal mass with explicit sweeps over load factor and Mach. If exact
+sensitivities are needed, they should be computed from repeated solves or a
+dedicated adjoint/KKT implementation.
 
 ---
 

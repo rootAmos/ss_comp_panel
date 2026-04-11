@@ -111,3 +111,12 @@ def test_rr_matches_orthotropic_cross_ply(mat, panel):
     from composite_panel.buckling import _rr_Nxx_cr
     Ncr_rr = _rr_Nxx_cr(lam.D, a, b)
     assert abs(Ncr_rr - Ncr_ortho) / Ncr_ortho < 0.01  # <1% difference
+
+
+def test_buckling_rf_warns_on_bend_twist(mat, panel):
+    # Significant D16/D26 should emit a warning from the exact buckling RF path.
+    a, b = panel['a'], panel['b']
+    lam = Laminate([Ply(mat, 0.125e-3, 30.0)])
+    N = np.array([-1e3, 0.0, 0.0])
+    with pytest.warns(UserWarning, match="bend-twist coupling"):
+        buckling_rf(N, lam.D, a, b)
