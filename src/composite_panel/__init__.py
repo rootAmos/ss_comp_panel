@@ -38,6 +38,9 @@ from .buckling  import (Nxx_cr, Nyy_cr, Nxy_cr, buckling_rf,
                         Nxx_cr_smooth, Nyy_cr_smooth, Nxy_cr_smooth,
                         buckling_rf_smooth, suggest_mode_number)
 from .loads_db    import LoadCase, LoadsDatabase
+from .loads_store import LoadsStore
+from .cp_integration import (CpSection, CpField, section_coefficients,
+                              integrate_cp_field, load_cp_csv, load_cp_tecplot)
 from .arrow_wing  import (ArrowWingGeometry, arrow_wing_panel_loads,
                            arrow_wing_loads_database)
 from .optimizer   import (
@@ -72,7 +75,12 @@ __all__ = [
     "buckling_rf_smooth", "suggest_mode_number",
     # loads database
     "LoadCase", "LoadsDatabase",
-    # arrow wing (CR-132575)
+    # loads store (scalable SQLite backend)
+    "LoadsStore",
+    # Cp integration pipeline
+    "CpSection", "CpField", "section_coefficients",
+    "integrate_cp_field", "load_cp_csv", "load_cp_tecplot",
+    # arrow wing (computed)
     "ArrowWingGeometry", "arrow_wing_panel_loads", "arrow_wing_loads_database",
     # optimizer
     "optimize_laminate", "optimize_laminate_multicase",
