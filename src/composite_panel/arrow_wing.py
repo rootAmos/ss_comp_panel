@@ -28,14 +28,18 @@ Configuration: Lockheed L-2000-7A Mach 2.7 arrow-wing SST
     Tip chord ........... 2.3 m (7.5 ft)
     t/c ................. 3%
 
-Panel loads use strip-theory bending, Ackeret/Prandtl-Glauert pressure, and
-full Mohr stress transformation for the compound-sweep planform.  The high
-sweep angles (74/57 deg) cause wing bending to produce large chordwise
-compression (Nyy) via the sin^2(sweep) term -- this is a defining structural
-feature of arrow/delta wings and must not be neglected.
+Panel loads use strip-theory bending with Ackeret/Prandtl-Glauert pressure.
+Loads are expressed in the **spar-aligned panel frame** (Nxx along spar,
+Nyy perpendicular to spar), which is the natural frame for a composite panel
+between stringers on a swept wing.  The bending moment projects onto the spar
+axis via cos(sweep), and the bending stress is uniaxial along the spar -- no
+Mohr transformation is needed in this frame.  Shear (Nxy) comes from
+transverse shear V and Bredt torque T, not from coordinate rotation of the
+bending stress.
 
 Values are representative upper wing skin loads for structural sizing, derived
 from the CR-132575 configuration geometry -- not digitised from report figures.
+The 0-deg ply direction should be aligned with the spar/stringer direction.
 
 Usage
 -----
@@ -198,37 +202,42 @@ def _make_panel_loads(
     V_shear: float,
     T_torque: float,
 ) -> LoadCase:
-    """Convert structural distributions into panel running loads at *eta*."""
-    c_loc = geom.chord(eta)
+    """Convert structural distributions into panel running loads at *eta*.
+
+    Loads are expressed in the **spar-aligned panel frame**:
+        Nxx = along spar / stringers  (panel length between ribs)
+        Nyy = perpendicular to spar   (stringer pitch direction)
+    This is the natural frame for a composite panel between stringers.
+    The 0-deg ply direction should be aligned with the spar.
+
+    The bending moment M_perp (about the freestream-parallel axis) projects
+    onto the spar axis as M_spar = M_perp * cos(sweep).  The skin running
+    load from bending is then Nxx = -M_spar / (h * c_box), with no further
+    Mohr transformation needed -- the stress is uniaxial along the spar.
+    """
     h_box = geom.box_height(eta)
     c_box = geom.box_chord(eta)
     sweep = _np.radians(geom.sweep_deg(eta))
     b_panel = geom.stringer_pitch_m
 
-    # Spanwise running load from bending [N/m of chord].
-    # Upper skin carries compression; positive M_bend -> N_span negative.
-    N_span = -M_bend / max(h_box * c_box, 1e-6)
-
-    # Full Mohr transformation to panel axes (x = stream, y = chord).
-    # For arrow wings the sin^2 chordwise term is large and must not
-    # be neglected -- it dominates Nxx at sweep > 60 deg.
+    # Spar bending moment = perpendicular moment projected onto spar axis
     cos_L = _np.cos(sweep)
-    sin_L = _np.sin(sweep)
+    M_spar = M_bend * cos_L
 
-    # Nxx: streamwise component of bending
-    Nxx = N_span * cos_L ** 2
+    # Nxx: compression along spar from bending (upper skin = compression flange)
+    Nxx = -M_spar / max(h_box * c_box, 1e-6)
 
-    # Nyy: chordwise bending + aerodynamic pressure between stringers
-    Nyy_bend = N_span * sin_L ** 2
-    Nyy_press = -delta_p * b_panel / 2.0
-    Nyy = Nyy_bend + Nyy_press
+    # Nyy: aerodynamic pressure between stringers only.
+    # No bending contribution in the spar frame -- the bending stress is
+    # uniaxial along x (spar direction), so sigma_yy = 0.
+    Nyy = -delta_p * b_panel / 2.0
 
-    # Nxy: bending shear + spar web shear + Bredt torque
-    Nxy_bend = abs(N_span) * sin_L * cos_L
+    # Nxy: transverse-shear skin fraction + Bredt torque from AC-EA offset.
+    # No sweep-induced bending shear in the spar frame.
     Nxy_spar = abs(V_shear) / max(2.0 * h_box, 1e-6) * 0.25
     A_cell = h_box * c_box
     Nxy_torque = abs(T_torque) / max(2.0 * A_cell, 1e-6)
-    Nxy = Nxy_bend + Nxy_spar + Nxy_torque
+    Nxy = Nxy_spar + Nxy_torque
 
     # Mxx: local panel bending from pressure (simply-supported between stringers)
     Mxx = abs(delta_p) * b_panel ** 2 / 8.0

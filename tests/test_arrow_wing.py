@@ -87,41 +87,33 @@ class TestArrowWingPanelLoads:
         )
         assert case.Nxx < 0, "Expected Nxx < 0 (compression)"
 
-    def test_chordwise_compression(self):
-        """Positive n -> chordwise compression from bending on upper skin."""
+    def test_nyy_from_pressure_only(self):
+        """In spar frame, Nyy is pressure only -- small relative to Nxx."""
         case = arrow_wing_panel_loads(
             eta=0.35, mach=2.7, altitude_m=19_800,
             alpha_deg=7.5, n_load=2.5,
         )
-        assert case.Nyy < 0, "Expected Nyy < 0 (chordwise compression)"
+        assert case.Nyy < 0, "Expected Nyy < 0 (pressure compression)"
+        assert abs(case.Nyy) < abs(case.Nxx), (
+            "In spar-aligned frame, |Nyy| (pressure only) should be << |Nxx| (bending)"
+        )
 
     def test_shear_positive(self):
         case = arrow_wing_panel_loads(
             eta=0.35, mach=2.7, altitude_m=19_800,
             alpha_deg=7.5, n_load=2.5,
         )
-        assert case.Nxy > 0, "Expected positive shear"
+        assert case.Nxy > 0, "Expected positive shear from V and T"
 
-    def test_shear_exceeds_streamwise_compression_at_high_sweep(self):
-        """For 74 deg sweep, |Nxy| should exceed |Nxx| -- arrow wings are shear-critical."""
+    def test_nxx_dominates_in_spar_frame(self):
+        """In spar-aligned frame, bending compression (Nxx) is the primary load."""
         case = arrow_wing_panel_loads(
-            eta=0.15, mach=2.7, altitude_m=19_800,
+            eta=0.35, mach=2.7, altitude_m=19_800,
             alpha_deg=7.5, n_load=2.5,
         )
-        assert abs(case.Nxy) > abs(case.Nxx), (
-            f"|Nxy|={abs(case.Nxy) / 1e3:.0f} should exceed "
-            f"|Nxx|={abs(case.Nxx) / 1e3:.0f} kN/m at 74 deg sweep"
-        )
-
-    def test_chordwise_exceeds_streamwise_at_high_sweep(self):
-        """For 74 deg sweep, |Nyy| >> |Nxx| due to sin^2(74) >> cos^2(74)."""
-        case = arrow_wing_panel_loads(
-            eta=0.15, mach=2.7, altitude_m=19_800,
-            alpha_deg=7.5, n_load=2.5,
-        )
-        assert abs(case.Nyy) > abs(case.Nxx), (
-            f"|Nyy|={abs(case.Nyy) / 1e3:.0f} should exceed "
-            f"|Nxx|={abs(case.Nxx) / 1e3:.0f} kN/m at 74 deg sweep"
+        assert abs(case.Nxx) > abs(case.Nyy), (
+            f"|Nxx|={abs(case.Nxx) / 1e3:.0f} should exceed "
+            f"|Nyy|={abs(case.Nyy) / 1e3:.0f} kN/m in spar frame"
         )
 
     def test_pushover_gives_tension(self):
