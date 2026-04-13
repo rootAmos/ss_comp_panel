@@ -5,6 +5,8 @@
 #   scripts/ONERAb114.tec
 #   scripts/onera_m6_pressure_points.csv
 #   scripts/onera_m6_pressure_sections.csv
+# For real in-repo importable line loads, see:
+#   scripts/published_panel_loads.csv
 # Those ONERA files are pressure data only; convert them externally if you need
 # validated panel running loads in the schema below.
 # Units: N [N/m], M [N.m/m]

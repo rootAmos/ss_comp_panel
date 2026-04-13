@@ -9,14 +9,14 @@ The repository still includes a closed-form `aero_loads.py` path, but it should 
 
 ```mermaid
 graph TD
+    DB[(Imported load cases - CSV / CFD / benchmark data)] --> RL[Running loads: Nxx Nyy Nxy Mxx]
     FC[Flight conditions - optional] --> regime{Speed regime}
     regime -->|M less than 0.85| PG[Prandtl-Glauert]
     regime -->|1.15 to 5| AC[Ackeret supersonic]
     regime -->|above 5| MN[Modified Newtonian]
-    PG --> RL[Running loads: Nxx Nyy Nxy Mxx]
+    PG --> RL
     AC --> RL
     MN --> RL
-    DB[(Imported load cases - CSV / CFD / benchmark data)] --> RL
 
     MAT[Material properties] --> CLT[CLT - ABD matrix]
     TH[Thermal loads] --> CLT
@@ -92,7 +92,7 @@ Use imported running loads as the main entry point:
 from composite_panel import IM7_8552, LoadsDatabase
 from composite_panel.optimizer import optimize_laminate_multicase, detect_balance_pairs
 
-db = LoadsDatabase.from_csv("my_panel_loads.csv")
+db = LoadsDatabase.from_csv("scripts/published_panel_loads.csv")
 mat = IM7_8552()
 angles = [0.0, 45.0, -45.0, 90.0]
 pairs = detect_balance_pairs(angles)
@@ -116,10 +116,15 @@ For in-repo reference data, see:
 - `scripts/ONERAb114.tec`
 - `scripts/onera_m6_pressure_points.csv`
 - `scripts/onera_m6_pressure_sections.csv`
+- `scripts/published_panel_loads.csv`
 
 These ONERA M6 files are public benchmark pressure data included for reference.
 They are not presented as a validated conversion to full `Nxx/Nyy/Nxy/Mxx`
 panel running loads.
+
+`scripts/published_panel_loads.csv` is different: it contains small public
+reference load cases that already map directly to the repo's import schema, so
+it can be loaded immediately with `LoadsDatabase.from_csv()`.
 
 ---
 

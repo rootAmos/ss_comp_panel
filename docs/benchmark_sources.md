@@ -36,6 +36,28 @@ These files are reference pressure data, not a validated conversion to full
 panel running loads. They are included so the repo has at least one real public
 benchmark dataset on disk instead of only empty templates.
 
+The repo also includes a small published line-load reference CSV:
+
+- `scripts/published_panel_loads.csv`
+  Importable `LoadCase` rows derived from public literature values that already
+  map cleanly to running loads per unit width.
+  Included cases currently cover:
+  - open-hole tensile and compressive line loads from PMCID `PMC7733007`
+  - in-plane shear and shear-after-impact reference loads from PMCID `PMC9324740`
+
+Primary source links for those imported load cases:
+
+- Ueda et al. (2020), *Tensile, compressive, and fatigue strength of a
+  quasi-isotropic carbon fiber reinforced plastic laminate with a punched hole*,
+  Heliyon 6(12):e05690
+  https://pmc.ncbi.nlm.nih.gov/articles/PMC7733007/
+- Liu and Xu (2022), *A Study on the In-Plane Shear-after-Impact Properties of
+  CFRP Composite Laminates*, Materials 15(14):5029
+  https://pmc.ncbi.nlm.nih.gov/articles/PMC9324740/
+
+These are closer to the repo's actual use case than pressure coefficients,
+because they can be loaded directly through `LoadsDatabase.from_csv()`.
+
 ## Expected import format
 
 Convert your external aero result into panel running loads and import it through

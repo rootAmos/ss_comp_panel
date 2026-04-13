@@ -84,7 +84,7 @@ class LoadsDatabase:
 
     Usage
     -----
-    >>> db = LoadsDatabase.from_csv("wing_envelope.csv")
+    >>> db = LoadsDatabase.from_csv("scripts/published_panel_loads.csv")
     >>> db.summary()
     >>> result = optimize_laminate_multicase(db.cases, mat, angles, ...)
     """
