@@ -108,10 +108,10 @@ def _T_stress(angle_rad):
 # Differentiable ABD assembly for symmetric laminates
 # ---------------------------------------------------------------------------
 
-def _build_ABD_symmetric(t_half: list, Q_bars_half: list):
+def _build_ABD_symmetric(t_half, Q_bars_half: list):
     """A, D from symmetric half-stack.  CasADi-compatible."""
-    n      = len(t_half)
-    h_half = sum(t_half)           # CasADi scalar if t_half contains opti vars
+    n = len(Q_bars_half)
+    h_half = np.sum(t_half)
 
     # A  --  linear in t
     A = Q_bars_half[0] * (2.0 * t_half[0])
@@ -131,21 +131,15 @@ def _build_ABD_symmetric(t_half: list, Q_bars_half: list):
     return A, D
 
 
-def _ply_zmid_symmetric(t_half: list) -> list:
+def _ply_zmid_symmetric(t_half):
     """Mid-plane z for all 2n plies of a symmetric stack."""
-    n      = len(t_half)
-    h_half = sum(t_half)
+    t_half_arr = np.array(t_half)
+    h_half = np.sum(t_half_arr)
 
-    z_bot = []
-    z = -h_half
-    for k in range(n):
-        z_bot.append(z + t_half[k] / 2.0)
-        z = z + t_half[k]
+    z_lower = -h_half + np.cumsum(t_half_arr) - 0.5 * t_half_arr
+    z_upper = -z_lower[::-1]
 
-    # Mirror: top ply j (j=0..n-1) corresponds to bottom ply (n-1-j)
-    z_top = [-z_bot[n-1-j] for j in range(n)]
-
-    return z_bot + z_top   # length 2n
+    return np.concatenate((z_lower, z_upper))
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +208,7 @@ def optimize_laminate(
     # ----------------------------------------------------------------------------
     verbose:          bool  = True,
 ) -> OptimizationResult:
-    """Minimum-mass symmetric laminate.  Tsai-Wu + optional buckling constraints."""
+    """Minimum-mass symmetric laminate given Tsai-Wu + optional buckling constraints."""
     n_half = len(angles_half_deg)
     N_vec  = np.array(N_loads, dtype=float)   # asb.numpy: keeps in CasADi graph if symbolic
     M_vec  = np.array(M_loads, dtype=float)
@@ -225,9 +219,8 @@ def optimize_laminate(
     if thermal_state is not None:
         pt = ply_thermal if ply_thermal is not None else IM7_8552_thermal()
         # Build a temporary laminate at initial-guess thicknesses for z_interfaces
-        _ang_full_init = [_np.degrees(r) for r in
-                          [_np.radians(a) for a in angles_half_deg] +
-                          list(reversed([_np.radians(a) for a in angles_half_deg]))]
+        _ang_half_init = _np.asarray(angles_half_deg, dtype=float)
+        _ang_full_init = _np.concatenate((_ang_half_init, _ang_half_init[::-1]))
         _lam_init = Laminate([Ply(mat, t_init, a) for a in _ang_full_init])
         _N_T, _M_T = _thermal_resultants(
             _lam_init.plies,
@@ -247,38 +240,37 @@ def optimize_laminate(
 
     # -- Thickness design variables -----------------------------------------
     t = opti.variable(n_vars=n_half, init_guess=t_init, lower_bound=t_min)
-    t_list = [t[k] for k in range(n_half)]
 
     # -- Angle design variables (optional) ----------------------------------
     if optimize_angles:
-        theta_init = _np.radians([a for a in angles_half_deg])
-        lo = _np.radians([b[0] for b in angle_bounds_deg])
-        hi = _np.radians([b[1] for b in angle_bounds_deg])
-        theta = opti.variable(n_vars=n_half, init_guess=theta_init,
-                              lower_bound=lo, upper_bound=hi)
-        theta_list = [theta[k] for k in range(n_half)]
+        theta_init = _np.radians(_np.asarray(angles_half_deg, dtype=float))
+        angle_bounds = _np.asarray(angle_bounds_deg, dtype=float)
+        lo = _np.radians(angle_bounds[:, 0])
+        hi = _np.radians(angle_bounds[:, 1])
+        theta_half = opti.variable(n_vars=n_half, init_guess=theta_init,
+                                   lower_bound=lo, upper_bound=hi)
 
         # Balance: theta_j = -theta_i  (skipped for unbalanced aeroelastic tailoring)
         if balance_pairs is not None and not allow_unbalanced:
             for (i, j) in balance_pairs:
-                opti.subject_to(theta_list[j] == -theta_list[i])
+                opti.subject_to(theta_half[j] == -theta_half[i])
     else:
-        theta_list = [_np.radians(a) for a in angles_half_deg]
+        theta_half = _np.radians(_np.asarray(angles_half_deg, dtype=float))
 
     # Balance: t_i = t_j  (skipped for unbalanced aeroelastic tailoring)
     if balance_pairs is not None and not allow_unbalanced:
         for (i, j) in balance_pairs:
-            opti.subject_to(t_list[i] == t_list[j])
+            opti.subject_to(t[j] == t[i])
 
     # -- Q_bar matrices (CasADi if angles are variables) --------------------
-    Q_bars_half = [_Q_bar_matrix(mat, theta_list[k]) for k in range(n_half)]
+    Q_bars_half = [_Q_bar_matrix(mat, theta_half[k]) for k in range(n_half)]
 
     # Full-stack sequences (bottom -> top)
-    theta_full  = theta_list + list(reversed(theta_list))
+    theta_full  = [theta_half[k] for k in range(n_half)] + [theta_half[k] for k in range(n_half - 1, -1, -1)]
     Q_bars_full = Q_bars_half + list(reversed(Q_bars_half))
 
     # -- ABD assembly -------------------------------------------------------
-    A_mat, D_mat = _build_ABD_symmetric(t_list, Q_bars_half)
+    A_mat, D_mat = _build_ABD_symmetric(t, Q_bars_half)
 
     # -- CLT response (B=0 for symmetric layup) -----------------------------
     a_comp = np.linalg.inv(A_mat)
@@ -287,7 +279,7 @@ def optimize_laminate(
     kappa  = d_comp @ M_vec
 
     # -- Ply stresses + Tsai-Wu constraints ---------------------------------
-    z_mids = _ply_zmid_symmetric(t_list)
+    z_mids = _ply_zmid_symmetric(t)
 
     for k in range(2 * n_half):
         Qb    = Q_bars_full[k]
@@ -316,7 +308,7 @@ def optimize_laminate(
         opti.subject_to(RF_buckle >= buckle_rf_min)
 
     # -- Objective ----------------------------------------------------------
-    opti.minimize(rho_kg_m3 * 2.0 * sum(t_list))
+    opti.minimize(rho_kg_m3 * 2.0 * np.sum(t))
 
     # -- Solve --------------------------------------------------------------
     try:
@@ -324,7 +316,7 @@ def optimize_laminate(
         converged = True
         t_half_opt = _np.array([float(sol(t[k])) for k in range(n_half)])
         if optimize_angles:
-            ang_half_opt = [float(_np.degrees(sol(theta[k]))) for k in range(n_half)]
+            ang_half_opt = [float(_np.degrees(sol(theta_half[k]))) for k in range(n_half)]
         else:
             ang_half_opt = list(angles_half_deg)
     except Exception as exc:
@@ -425,24 +417,23 @@ def optimize_laminate_multicase(
 
     # == Design variables: ply thicknesses ====================================
     t      = opti.variable(n_vars=n_half, init_guess=t_init, lower_bound=t_min)
-    t_list = [t[k] for k in range(n_half)]
 
     # == Fixed angles (angle optimization not implemented for multi-case) ======
-    theta_list  = [_np.radians(a) for a in angles_half_deg]
-    Q_bars_half = [_Q_bar_matrix(mat, theta_list[k]) for k in range(n_half)]
-    theta_full  = theta_list + list(reversed(theta_list))
+    theta_half  = _np.radians(_np.asarray(angles_half_deg, dtype=float))
+    Q_bars_half = [_Q_bar_matrix(mat, theta_half[k]) for k in range(n_half)]
+    theta_full  = [theta_half[k] for k in range(n_half)] + [theta_half[k] for k in range(n_half - 1, -1, -1)]
     Q_bars_full = Q_bars_half + list(reversed(Q_bars_half))
 
     # == Balance: t_i == t_j ==================================================?
     if balance_pairs is not None:
         for (i, j) in balance_pairs:
-            opti.subject_to(t_list[i] == t_list[j])
+            opti.subject_to(t[j] == t[i])
 
     # == ABD assembly  --  shared across all load cases ==========================?
-    A_mat, D_mat = _build_ABD_symmetric(t_list, Q_bars_half)
+    A_mat, D_mat = _build_ABD_symmetric(t, Q_bars_half)
     a_comp = np.linalg.inv(A_mat)
     d_comp = np.linalg.inv(D_mat)
-    z_mids = _ply_zmid_symmetric(t_list)
+    z_mids = _ply_zmid_symmetric(t)
 
     # Pre-compute buckling mode number from initial laminate (accounts for D22/D11)
     if panel_a is not None and panel_b is not None:
@@ -479,7 +470,7 @@ def optimize_laminate_multicase(
             opti.subject_to(RF_b >= buckle_rf_min)
 
     # == Objective: minimum areal mass ========================================?
-    opti.minimize(rho_kg_m3 * 2.0 * sum(t_list))
+    opti.minimize(rho_kg_m3 * 2.0 * np.sum(t))
 
     # == Solve ================================================================?
     try:
@@ -555,32 +546,32 @@ class WingOptimizationResult:
 
     @property
     def Nxx(self) -> _np.ndarray:
-        return _np.array([l.Nxx for l in self.loads])
+        return _np.fromiter((l.Nxx for l in self.loads), dtype=float, count=len(self.loads))
 
     @property
     def Nyy(self) -> _np.ndarray:
-        return _np.array([l.Nyy for l in self.loads])
+        return _np.fromiter((l.Nyy for l in self.loads), dtype=float, count=len(self.loads))
 
     @property
     def Nxy(self) -> _np.ndarray:
-        return _np.array([l.Nxy for l in self.loads])
+        return _np.fromiter((l.Nxy for l in self.loads), dtype=float, count=len(self.loads))
 
     @property
     def thicknesses(self) -> _np.ndarray:
-        return _np.array([r.total_h for r in self.opt_results])
+        return _np.fromiter((r.total_h for r in self.opt_results), dtype=float, count=len(self.opt_results))
 
     @property
     def areal_densities(self) -> _np.ndarray:
-        return _np.array([r.areal_density for r in self.opt_results])
+        return _np.fromiter((r.areal_density for r in self.opt_results), dtype=float, count=len(self.opt_results))
 
     @property
     def min_rfs(self) -> _np.ndarray:
-        return _np.array([r.min_tsai_wu_rf for r in self.opt_results])
+        return _np.fromiter((r.min_tsai_wu_rf for r in self.opt_results), dtype=float, count=len(self.opt_results))
 
     @property
     def t_half_matrix(self) -> _np.ndarray:
         """(n_stations, n_half) array of half-stack thicknesses."""
-        return _np.array([r.t_half for r in self.opt_results])
+        return _np.vstack(tuple(_np.asarray(r.t_half, dtype=float) for r in self.opt_results))
 
     @property
     def total_skin_mass(self) -> float:
@@ -588,11 +579,9 @@ class WingOptimizationResult:
         Approximate total upper-skin mass [kg] by integrating areal density
         along the semi-span, accounting for chord variation.
         """
-        masses = _np.array([
-            self.opt_results[i].areal_density * self.wing.chord(self.etas[i])
-            for i in range(len(self.etas))
-        ])
-        return float(_np.trapezoid(masses, self.etas * self.wing.semi_span))
+        return float(
+            _np.trapezoid(self.areal_densities * self.wing.chord(self.etas), self.etas * self.wing.semi_span)
+        )
 
 
 def optimize_wing(
@@ -687,10 +676,8 @@ def optimize_wing(
               f"  RF={result.min_tsai_wu_rf:.3f}  [{conv}]", end="", flush=True)
 
     print()
-    total_mass = _np.trapezoid(
-        [opt_list[i].areal_density * wing.chord(etas[i]) for i in range(n_stations)],
-        etas * wing.semi_span,
-    )
+    areal_density = _np.fromiter((r.areal_density for r in opt_list), dtype=float, count=n_stations)
+    total_mass = _np.trapezoid(areal_density * wing.chord(etas), etas * wing.semi_span)
     print(f"  Upper-skin mass (semi-span): {total_mass:.2f} kg")
 
     return WingOptimizationResult(
@@ -796,30 +783,29 @@ def optimize_laminate_aeroelastic(
     opti = asb.Opti()
 
     # == Thickness variables ====================================================
-    t      = opti.variable(n_vars=n_half, init_guess=t_init, lower_bound=t_min)
-    t_list = [t[k] for k in range(n_half)]
+    t = opti.variable(n_vars=n_half, init_guess=t_init, lower_bound=t_min)
 
     # == Angle variables (if bend-twist coupling is requested) ================?
     if use_bt_coupling:
-        theta_init = _np.radians([a for a in angles_half_deg])
-        lo = _np.radians([b[0] for b in angle_bounds_deg])
-        hi = _np.radians([b[1] for b in angle_bounds_deg])
-        theta = opti.variable(n_vars=n_half, init_guess=theta_init,
-                              lower_bound=lo, upper_bound=hi)
-        theta_list = [theta[k] for k in range(n_half)]
+        theta_init = _np.radians(_np.asarray(angles_half_deg, dtype=float))
+        angle_bounds = _np.asarray(angle_bounds_deg, dtype=float)
+        lo = _np.radians(angle_bounds[:, 0])
+        hi = _np.radians(angle_bounds[:, 1])
+        theta_half = opti.variable(n_vars=n_half, init_guess=theta_init,
+                                   lower_bound=lo, upper_bound=hi)
         # No balance constraints  --  allow D16 ? 0
     else:
-        theta_list = [_np.radians(a) for a in angles_half_deg]
+        theta_half = _np.radians(_np.asarray(angles_half_deg, dtype=float))
 
     # == ABD assembly ==========================================================?
-    Q_bars_half = [_Q_bar_matrix(mat, theta_list[k]) for k in range(n_half)]
+    Q_bars_half = [_Q_bar_matrix(mat, theta_half[k]) for k in range(n_half)]
     Q_bars_full = Q_bars_half + list(reversed(Q_bars_half))
-    theta_full  = theta_list + list(reversed(theta_list))
+    theta_full  = [theta_half[k] for k in range(n_half)] + [theta_half[k] for k in range(n_half - 1, -1, -1)]
 
-    A_mat, D_mat = _build_ABD_symmetric(t_list, Q_bars_half)
+    A_mat, D_mat = _build_ABD_symmetric(t, Q_bars_half)
     a_comp = np.linalg.inv(A_mat)
     d_comp = np.linalg.inv(D_mat)
-    z_mids = _ply_zmid_symmetric(t_list)
+    z_mids = _ply_zmid_symmetric(t)
 
     # == Tsai-Wu constraints ====================================================
     eps0  = a_comp @ N_vec
@@ -920,7 +906,7 @@ def optimize_laminate_aeroelastic(
     EK = 2.0 * D16 * box_fraction * wing.root_chord
 
     # == Objective ============================================================?
-    opti.minimize(rho_kg_m3 * 2.0 * sum(t_list))
+    opti.minimize(rho_kg_m3 * 2.0 * np.sum(t))
 
     # == Solve ================================================================?
     try:
@@ -928,7 +914,7 @@ def optimize_laminate_aeroelastic(
         converged = True
         t_half_opt = _np.array([float(sol(t[k])) for k in range(n_half)])
         if use_bt_coupling:
-            ang_half_opt = [float(_np.degrees(sol(theta[k]))) for k in range(n_half)]
+            ang_half_opt = [float(_np.degrees(sol(theta_half[k]))) for k in range(n_half)]
         else:
             ang_half_opt = list(angles_half_deg)
 

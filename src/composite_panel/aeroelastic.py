@@ -186,6 +186,9 @@ def static_aeroelastic(
     (Euler-Bernoulli), the aeroelastic system is:
         alpha_eff = alpha_rigid + A · alpha_eff
     solved as  (I - A) · alpha_eff = alpha_rigid · 1.
+    In the Modified-Newtonian regime, this is only a local one-point
+    linearisation about the unit-alpha load evaluation used below, not a
+    validated nonlinear hypersonic aeroelastic model.
     Bisplinghoff, Ashley & Halfman (1955), Ch. 8; Weisshaar (1981), J. Aircraft.
     """
     n    = n_stations
@@ -217,7 +220,8 @@ def static_aeroelastic(
             bt_ratio = np.where(np.abs(GJ) > 1e-30, EK / GJ, 0.0)
 
     # == Aerodynamic load sensitivity  S_deg[i] = d(q_lift_i)/d(alpha_deg) ====
-    # Both Prandtl-Glauert and Ackeret are linear in alpha, so evaluate at 1 deg.
+    # PG and Ackeret are exactly linear in alpha; the Newtonian path uses the
+    # same unit-alpha evaluation as a local secant linearisation.
     loads_unit = [
         wing_panel_loads(wing, etas[i], mach, altitude_m, 1.0, n_load)
         for i in range(n)

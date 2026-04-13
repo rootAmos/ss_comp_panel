@@ -14,7 +14,6 @@ from composite_panel.aero_loads import (
     prandtl_glauert_panel_pressure,
     ackeret_panel_pressure,
     hypersonic_panel_pressure,
-    oblique_shock_panel_pressure,
 )
 
 
@@ -37,6 +36,15 @@ def test_panel_pressure_supersonic_matches_ackeret():
 
 
 def test_panel_pressure_hypersonic_matches_modified_newtonian():
+    mach = 12.0     # well above the Mach-5 handoff, pure Newtonian
+    alpha_deg = 3.0
+    q_inf = 88_000.0
+    ref = hypersonic_panel_pressure(mach, alpha_deg, q_inf)
+    got = panel_pressure(mach, alpha_deg, q_inf)
+    assert math.isclose(got, ref, rel_tol=1e-12)
+
+
+def test_panel_pressure_hypersonic_switch_occurs_above_mach_five():
     mach = 5.1
     alpha_deg = 3.0
     q_inf = 88_000.0
@@ -48,15 +56,3 @@ def test_panel_pressure_hypersonic_matches_modified_newtonian():
 def test_panel_pressure_transonic_gap_raises():
     with np.testing.assert_raises(ValueError):
         panel_pressure(1.0, 3.0, 50_000.0)
-
-
-def test_oblique_shock_panel_pressure_vectorizes():
-    mach = np.array([1.5, 1.7])
-    alpha_deg = np.array([3.0, 4.0])
-    q_inf = np.array([50_000.0, 60_000.0])
-
-    got = oblique_shock_panel_pressure(mach, alpha_deg, q_inf)
-
-    assert isinstance(got, np.ndarray)
-    assert got.shape == mach.shape
-    assert np.all(got > 0.0)

@@ -28,6 +28,8 @@ class Laminate:
         thicknesses = np.array([p.thickness for p in self.plies])
         total = float(thicknesses.sum())
         self._h = total
+        self._thicknesses = thicknesses
+        self._angles_deg = np.array([p.angle_deg for p in self.plies])
 
         self._z = np.empty(len(self.plies) + 1)
         self._z[0] = -total / 2.0
@@ -131,11 +133,17 @@ class Laminate:
         Laminate CTE [1/K] as [alphax, alphay, alphaxy].
         Valid for symmetric laminates (B=0).
         """
-        from composite_panel.thermal import alpha_bar
-
-        angles_rad = np.radians(np.array([p.angle_deg for p in self.plies]))
-        alpha_stack = np.stack([alpha_bar(pt, th) for pt, th in zip(ply_thermals, angles_rad)])  # (n_plies, 3)
-        dz = self._z[1:] - self._z[:-1]                                                         # (n_plies,)
+        alpha_1 = np.array([pt.alpha_1 for pt in ply_thermals])
+        alpha_2 = np.array([pt.alpha_2 for pt in ply_thermals])
+        angles_rad = np.radians(self._angles_deg)
+        c = np.cos(angles_rad)
+        s = np.sin(angles_rad)
+        alpha_stack = np.stack([
+            alpha_1 * c**2 + alpha_2 * s**2,
+            alpha_1 * s**2 + alpha_2 * c**2,
+            2.0 * (alpha_1 - alpha_2) * c * s,
+        ], axis=1)
+        dz = self._thicknesses
 
         # NT = Σ Q̄_k · α_k · Δz_k  →  einsum over ply stack
         NT_unit = np.einsum('kij,kj,k->i', self._Qbar_stack, alpha_stack, dz)
@@ -198,11 +206,9 @@ class Laminate:
 
     @property
     def is_symmetric(self) -> bool:
-        angles = np.array([p.angle_deg for p in self.plies])
-        thicks = np.array([p.thickness for p in self.plies])
         return bool(
-            np.all(np.abs(angles - angles[::-1]) < 0.1)
-            and np.all(np.abs(thicks - thicks[::-1]) < 1e-6)
+            np.all(np.abs(self._angles_deg - self._angles_deg[::-1]) < 0.1)
+            and np.all(np.abs(self._thicknesses - self._thicknesses[::-1]) < 1e-6)
         )
 
     @property
@@ -211,11 +217,6 @@ class Laminate:
         scale = float(np.sqrt(abs(A[0, 0] * A[2, 2]))) + 1e-30
         return (abs(A[0, 2]) / scale < 1e-3 and
                 abs(A[1, 2]) / scale < 1e-3)
-
-    @property
-    def lamination_params(self) -> dict:
-        from composite_panel.lamination_parameters import lamination_parameters as _lp
-        return _lp(self)
 
     def __repr__(self) -> str:
         stack = "/".join(str(int(p.angle_deg)) for p in self.plies)

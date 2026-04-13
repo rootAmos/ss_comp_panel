@@ -73,22 +73,27 @@ def thermal_resultants(
         )
 
     h_total = z_interfaces[-1] - z_interfaces[0]
-    N_T = np.zeros(3)
-    M_T = np.zeros(3)
+    z0 = z_interfaces[:-1]
+    z1 = z_interfaces[1:]
+    z_mid = 0.5 * (z0 + z1)
+    t_stack = z1 - z0
 
-    for k, (ply, pt) in enumerate(zip(plies, ply_thermals)):
-        z0    = z_interfaces[k]
-        z1    = z_interfaces[k + 1]
-        z_mid = 0.5 * (z0 + z1)
-        t_k   = z1 - z0
+    delta_T = thermal_state.delta_T_at_z(z_mid, h_total)
+    angles_rad = np.radians(np.array([ply.angle_deg for ply in plies]))
+    alpha_1 = np.array([pt.alpha_1 for pt in ply_thermals])
+    alpha_2 = np.array([pt.alpha_2 for pt in ply_thermals])
+    c = np.cos(angles_rad)
+    s = np.sin(angles_rad)
+    alpha_stack = np.stack([
+        alpha_1 * c**2 + alpha_2 * s**2,
+        alpha_1 * s**2 + alpha_2 * c**2,
+        2.0 * (alpha_1 - alpha_2) * c * s,
+    ], axis=1)
+    qbar_stack = np.stack([ply.Q_bar for ply in plies])
+    qbar_alpha = np.einsum("kij,kj->ki", qbar_stack, alpha_stack)
 
-        delta_T_k = thermal_state.delta_T_at_z(z_mid, h_total)
-        ab = alpha_bar(pt, np.radians(ply.angle_deg))
-        Qb_ab = ply.Q_bar @ ab
-
-        N_T += Qb_ab * delta_T_k * t_k
-        M_T += Qb_ab * delta_T_k * z_mid * t_k
-
+    N_T = np.einsum("ki,k,k->i", qbar_alpha, delta_T, t_stack)
+    M_T = np.einsum("ki,k,k,k->i", qbar_alpha, delta_T, z_mid, t_stack)
     return N_T, M_T
 
 
