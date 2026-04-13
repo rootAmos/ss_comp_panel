@@ -3,6 +3,10 @@ composite_panel.loads_db
 ------------------------
 Load case container and CSV-backed database for multi-condition sizing.
 
+This is the intended primary workflow for the repo: import running loads from
+external aero sources rather than relying on the crude closed-form estimates in
+`aero_loads.py`.
+
 CSV schema: name, Nxx, Nyy, Nxy [required],
             Mxx, Myy, Mxy, source, eta, description [optional]
 Units: N/m (running forces), N.m/m (moments).  Compression negative.

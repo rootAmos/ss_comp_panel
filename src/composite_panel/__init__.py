@@ -3,9 +3,11 @@ composite_panel
 ===============
 Classical Laminate Theory toolkit for composite panel analysis.
 
-Designed for aerospace structural sizing of high-speed airframe skin panels,
-with closed-form aero loads spanning supported subsonic, supersonic, and
-hypersonic regimes. Core workflow:
+Designed for aerospace structural sizing of high-speed airframe skin panels.
+Primary workflow is to import external running loads, then size the laminate
+against those inputs. Closed-form aero helpers remain for screening/demo use.
+
+Core workflow:
 
     from composite_panel import PlyMaterial, Ply, Laminate
     from composite_panel import failure, aero_loads

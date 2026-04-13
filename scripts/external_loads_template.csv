@@ -1,0 +1,9 @@
+# external_loads_template.csv
+# Fill this file with running loads imported from CFD, wind tunnel processing,
+# or published benchmark datasets.
+# Units: N [N/m], M [N.m/m]
+# Compression negative.
+# Columns: name, Nxx, Nyy, Nxy, Mxx, Myy, Mxy, source, eta, description
+name,Nxx,Nyy,Nxy,Mxx,Myy,Mxy,source,eta,description
+benchmark_case_1,0.0,0.0,0.0,0.0,0.0,0.0,external_benchmark,,replace with imported running loads
+benchmark_case_2,0.0,0.0,0.0,0.0,0.0,0.0,external_benchmark,,replace with imported running loads

@@ -1,6 +1,10 @@
 """
 Aerodynamic load generation for panel-level structural sizing.
 
+These functions are retained for screening/demo use only. The preferred repo
+workflow is to import externally generated running loads through
+`composite_panel.loads_db`.
+
 Pressure models:
   - Prandtl-Glauert subsonic (M <= 0.85)
   - Ackeret linearised supersonic (1.15 <= M <= 5.0)
@@ -82,8 +86,8 @@ def wing_panel_loads(
     alpha_deg,
     n_load = 2.5,
 ) -> "PanelLoads":
-    """Running loads at spanwise station eta for upper wing skin.
-    Strip-theory (chord-proportional) spanwise distribution."""
+    """Screening-only running loads at spanwise station eta for upper wing skin.
+    Uses simplified strip-theory and closed-form pressure assumptions."""
     c_loc = wing.chord(eta)
     b     = wing.semi_span
     y_loc = eta * b

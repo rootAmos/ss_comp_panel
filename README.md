@@ -2,21 +2,21 @@
 
 A self-study Python toolkit for preliminary sizing of composite wing skin panels on high-speed airframes.
 
-The active running-load path uses Prandtl-Glauert for subsonic flight, Ackeret linearised theory through Mach 5, and Modified Newtonian above Mach 5.
+The primary workflow is to import panel running loads from external sources such as CSV load tables, CFD post-processing, wind-tunnel benchmarks, or other aero tools.
 
-The resulting running loads feed into Classical Laminate Theory to recover ply-level stresses, which are checked against failure criteria (Tsai-Wu, Hashin, max-stress) and a panel buckling margin. A CasADi/IPOPT gradient-based optimizer then sizes the laminate across all load cases simultaneously.
+The repository still includes a closed-form `aero_loads.py` path, but it should be treated as screening/demo-only. The resulting running loads feed into Classical Laminate Theory to recover ply-level stresses, which are checked against failure criteria (Tsai-Wu, Hashin, max-stress) and a panel buckling margin. A CasADi/IPOPT gradient-based optimizer then sizes the laminate across all load cases simultaneously.
 
 
 ```mermaid
 graph TD
-    FC[Flight conditions] --> regime{Speed regime}
+    FC[Flight conditions - optional] --> regime{Speed regime}
     regime -->|M less than 0.85| PG[Prandtl-Glauert]
     regime -->|1.15 to 5| AC[Ackeret supersonic]
     regime -->|above 5| MN[Modified Newtonian]
     PG --> RL[Running loads: Nxx Nyy Nxy Mxx]
     AC --> RL
     MN --> RL
-    DB[(Load cases - CSV / CFD / VLM)] --> RL
+    DB[(Imported load cases - CSV / CFD / benchmark data)] --> RL
 
     MAT[Material properties] --> CLT[CLT - ABD matrix]
     TH[Thermal loads] --> CLT
@@ -45,14 +45,14 @@ src/composite_panel/
 |-- failure.py                 --  Tsai-Wu, Tsai-Hill, Hashin, max-stress, max-strain
 |-- buckling.py                --  panel buckling RF under combined Nxx/Nyy/Nxy
 |-- thermal.py                 --  CTE transforms, thermal resultants, aero heating
-|-- aero_loads.py              --  Prandtl-Glauert / Ackeret / Modified Newtonian pressure to running loads
-|-- loads_db.py                --  LoadCase, LoadsDatabase (CSV-backed collection)
+|-- aero_loads.py              --  screening/demo closed-form pressure-to-load estimates
+|-- loads_db.py                --  LoadCase, LoadsDatabase (primary external-load workflow)
 |-- aeroelastic.py             --  static aeroelastic correction (Euler-Bernoulli + washout)
 +-- optimizer.py               --  minimum-mass NLP via IPOPT/CasADi (single + multicase + aeroelastic)
 
 scripts/                               all plots written to outputs/
-|-- validate_model.py                   --  run first: regression checks against 7 analytical benchmarks
-+-- flight_envelope.csv                 --  reference load cases for multicase sizing examples
+|-- validate_model.py                   --  regression checks against analytical/consistency benchmarks
++-- flight_envelope.csv                 --  legacy internally generated example load cases
 
 tests/
 |-- test_basics.py
@@ -66,7 +66,7 @@ docs/
 
 notebooks/                             read in order; each builds on the previous
 |-- 01_composite_panel_tutorial.ipynb       --  start here: material constants, Q-bar, ABD matrix, failure criteria, optimizer
-|-- 02_tutorial_multicase_sizing.ipynb      --  multi-case NLP from a real flight envelope
+|-- 02_tutorial_multicase_sizing.ipynb      --  multi-case NLP from imported running-load cases
 |-- 03_tutorial_hypersonic_wing.ipynb       --  adiabatic wall temperature, thermal resultants, high-speed sizing examples through Mach 5
 |-- 04_tutorial_aeroelastic_tailoring.ipynb --  D16 bend-twist coupling; strength + washout in one IPOPT solve
 +-- 05_tutorial_sensitivity.ipynb           --  parametric sweeps of n_load and Mach
@@ -84,10 +84,40 @@ Core dependencies (`numpy`, `matplotlib`, `aerosandbox`) are declared in `pyproj
 
 ---
 
+## Primary Workflow
+
+Use imported running loads as the main entry point:
+
+```python
+from composite_panel import IM7_8552, LoadsDatabase
+from composite_panel.optimizer import optimize_laminate_multicase, detect_balance_pairs
+
+db = LoadsDatabase.from_csv("my_panel_loads.csv")
+mat = IM7_8552()
+angles = [0.0, 45.0, -45.0, 90.0]
+pairs = detect_balance_pairs(angles)
+
+result = optimize_laminate_multicase(
+    db.cases,
+    mat,
+    angles,
+    balance_pairs=pairs,
+    rf_min=1.5,
+    verbose=False,
+)
+```
+
+The CSV schema is:
+`name, Nxx, Nyy, Nxy, Mxx, Myy, Mxy, source, eta, description`
+
+See [docs/benchmark_sources.md](docs/benchmark_sources.md) for public benchmark datasets that can be post-processed into this format.
+
+---
+
 ## Limitations
 
 - This is a panel-level preliminary-analysis model, not a full wing-box structural model.
-- Spanwise loads use closed-form/strip-theory assumptions and are not a substitute for a full loads process.
+- Imported running loads are the intended workflow. The built-in `aero_loads.py` functions use crude closed-form assumptions and are not a substitute for a full loads process.
 - The transonic regime is intentionally unsupported.
 - The aeroelastic treatment is a simplified linear static model intended for intuition and trade studies.
 - The `LoadsDatabase` module is a CSV-backed collection for examples and small studies, not a production data system.

@@ -1,7 +1,8 @@
 # flight_envelope.csv
-# Wing skin panel running loads for IM7/8552 [0/+45/-45/90]s sizing.
+# Legacy internally generated example running loads for IM7/8552 [0/+45/-45/90]s sizing.
 # Wing: semi_span=4.5m  root_chord=4.0m  taper=0.25  sweep=50deg  MTOW=120kN
-# Loads from the current closed-form aero model for the Mach values used here (Prandtl-Glauert / Ackeret) plus gust reference cases.
+# These cases were generated from the repo's simplified closed-form aero model plus gust reference cases.
+# Treat this file as an example import format, not as benchmark-quality aerodynamic data.
 # Units: N [N/m],  M [N.m/m]
 # Columns: name, Nxx, Nyy, Nxy, Mxx, Myy, Mxy, source, eta, description
 #
