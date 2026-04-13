@@ -1,6 +1,12 @@
 # external_loads_template.csv
 # Fill this file with running loads imported from CFD, wind tunnel processing,
 # or published benchmark datasets.
+# For real in-repo benchmark pressure reference data, see:
+#   scripts/ONERAb114.tec
+#   scripts/onera_m6_pressure_points.csv
+#   scripts/onera_m6_pressure_sections.csv
+# Those ONERA files are pressure data only; convert them externally if you need
+# validated panel running loads in the schema below.
 # Units: N [N/m], M [N.m/m]
 # Compression negative.
 # Columns: name, Nxx, Nyy, Nxy, Mxx, Myy, Mxy, source, eta, description

@@ -1,0 +1,8 @@
+"section","eta","cp_lower_mean","cp_upper_mean","delta_cp_mean","q_inf_pa","delta_p_mean_pa","source","description"
+"1","0.2","-0.058455","-0.314087","0.255632","155882.98","39848.74","NASA Glenn ONERA M6 test 2308","Section-averaged pressure differential from public ONERA M6 Cp data"
+"2","0.44","-0.052","-0.368565","0.316565","155882.98","49347.13","NASA Glenn ONERA M6 test 2308","Section-averaged pressure differential from public ONERA M6 Cp data"
+"3","0.65","-0.043091","-0.391565","0.348474","155882.98","54321.21","NASA Glenn ONERA M6 test 2308","Section-averaged pressure differential from public ONERA M6 Cp data"
+"4","0.8","-0.049273","-0.374087","0.324814","155882.98","50633.01","NASA Glenn ONERA M6 test 2308","Section-averaged pressure differential from public ONERA M6 Cp data"
+"5","0.9","-0.073643","-0.36929","0.295647","155882.98","46086.41","NASA Glenn ONERA M6 test 2308","Section-averaged pressure differential from public ONERA M6 Cp data"
+"6","0.96","-0.101714","-0.329645","0.227931","155882.98","35530.54","NASA Glenn ONERA M6 test 2308","Section-averaged pressure differential from public ONERA M6 Cp data"
+"7","0.99","-0.164214","-0.394355","0.230141","155882.98","35875","NASA Glenn ONERA M6 test 2308","Section-averaged pressure differential from public ONERA M6 Cp data"

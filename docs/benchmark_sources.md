@@ -18,6 +18,24 @@ source such as CFD, wind-tunnel processing, or published benchmark datasets.
 - NACA RM L58C07, supersonic pressure distributions on a 60 deg delta wing:
   https://ntrs.nasa.gov/citations/19660011611
 
+## Included reference data in this repo
+
+The repo now includes a small ONERA M6 reference subset under `scripts/`:
+
+- `scripts/ONERAb114.tec`
+  Raw public pressure-coefficient data downloaded from the NASA Glenn ONERA M6
+  validation page.
+- `scripts/onera_m6_pressure_points.csv`
+  Pointwise pressure-coefficient rows with:
+  `section, np, x_over_c, eta, z_over_c, cp, surface, source`
+- `scripts/onera_m6_pressure_sections.csv`
+  Section-averaged pressure summary with:
+  `section, eta, cp_lower_mean, cp_upper_mean, delta_cp_mean, q_inf_pa, delta_p_mean_pa, source, description`
+
+These files are reference pressure data, not a validated conversion to full
+panel running loads. They are included so the repo has at least one real public
+benchmark dataset on disk instead of only empty templates.
+
 ## Expected import format
 
 Convert your external aero result into panel running loads and import it through

@@ -112,6 +112,15 @@ The CSV schema is:
 
 See [docs/benchmark_sources.md](docs/benchmark_sources.md) for public benchmark datasets that can be post-processed into this format.
 
+For in-repo reference data, see:
+- `scripts/ONERAb114.tec`
+- `scripts/onera_m6_pressure_points.csv`
+- `scripts/onera_m6_pressure_sections.csv`
+
+These ONERA M6 files are public benchmark pressure data included for reference.
+They are not presented as a validated conversion to full `Nxx/Nyy/Nxy/Mxx`
+panel running loads.
+
 ---
 
 ## Limitations
