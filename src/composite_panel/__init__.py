@@ -38,6 +38,8 @@ from .buckling  import (Nxx_cr, Nyy_cr, Nxy_cr, buckling_rf,
                         Nxx_cr_smooth, Nyy_cr_smooth, Nxy_cr_smooth,
                         buckling_rf_smooth, suggest_mode_number)
 from .loads_db    import LoadCase, LoadsDatabase
+from .arrow_wing  import (ArrowWingGeometry, arrow_wing_panel_loads,
+                           arrow_wing_loads_database)
 from .optimizer   import (
     optimize_laminate, optimize_laminate_multicase,
     optimize_wing, detect_balance_pairs,
@@ -70,6 +72,8 @@ __all__ = [
     "buckling_rf_smooth", "suggest_mode_number",
     # loads database
     "LoadCase", "LoadsDatabase",
+    # arrow wing (CR-132575)
+    "ArrowWingGeometry", "arrow_wing_panel_loads", "arrow_wing_loads_database",
     # optimizer
     "optimize_laminate", "optimize_laminate_multicase",
     "optimize_wing", "detect_balance_pairs",

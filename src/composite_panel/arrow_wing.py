@@ -1,0 +1,404 @@
+"""
+composite_panel.arrow_wing
+--------------------------
+Arrow-Wing Supersonic Cruise Aircraft structural loads database.
+
+Loads derived from the configuration parameters of NASA CR-132575 (Lockheed,
+1975): "Arrow-Wing Supersonic Cruise Aircraft Structural Design Concepts
+Evaluation", 4 volumes:
+
+    Vol 1 (config & loads): ntrs.nasa.gov/citations/19760021131
+    Vol 2 (design studies):  ntrs.nasa.gov/citations/19760021132
+    Vol 3 (materials):       ntrs.nasa.gov/citations/19760021133
+    Vol 4 (manufacturing):   ntrs.nasa.gov/citations/19760021134
+
+Supporting aeroelastic data:
+    NASA CR-3640: ntrs.nasa.gov/citations/19830013892
+
+Configuration: Lockheed L-2000-7A Mach 2.7 arrow-wing SST
+    Design Mach ......... 2.7
+    Cruise altitude ..... 19,800 m (65,000 ft)
+    TOGW ................ 340,194 kg (750,000 lb)
+    Wing ref area ....... 855 m^2 (9,200 ft^2)
+    Wingspan ............ 44.5 m (146 ft)
+    LE sweep inboard .... 74 deg
+    LE sweep outboard ... 57 deg  (break at 40% semi-span)
+    Root chord .......... 38.1 m (125 ft)
+    Kink chord .......... 13.7 m (45 ft at 40% span)
+    Tip chord ........... 2.3 m (7.5 ft)
+    t/c ................. 3%
+
+Panel loads use strip-theory bending, Ackeret/Prandtl-Glauert pressure, and
+full Mohr stress transformation for the compound-sweep planform.  The high
+sweep angles (74/57 deg) cause wing bending to produce large chordwise
+compression (Nyy) via the sin^2(sweep) term -- this is a defining structural
+feature of arrow/delta wings and must not be neglected.
+
+Values are representative upper wing skin loads for structural sizing, derived
+from the CR-132575 configuration geometry -- not digitised from report figures.
+
+Usage
+-----
+    from composite_panel.arrow_wing import arrow_wing_loads_database
+    db = arrow_wing_loads_database()
+    db.print_summary()
+
+    # Single point query
+    from composite_panel.arrow_wing import arrow_wing_panel_loads
+    case = arrow_wing_panel_loads(eta=0.35, mach=2.7, altitude_m=19800,
+                                  alpha_deg=7.5, n_load=2.5)
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import Tuple
+
+import numpy as _np  # plain numpy for numerical integration
+
+# numpy 2.x renamed trapz -> trapezoid
+_trapz = getattr(_np, "trapezoid", None) or _np.trapz
+
+from .loads_db import LoadCase, LoadsDatabase
+from .aero_loads import _isa
+
+
+# -----------------------------------------------------------------------
+# Arrow-wing geometry  (CR-132575, Lockheed L-2000-7A)
+# -----------------------------------------------------------------------
+
+@dataclass
+class ArrowWingGeometry:
+    """
+    Compound-sweep arrow-wing planform from NASA CR-132575.
+
+    The wing has a cranked leading edge: 74 deg inboard sweep transitioning
+    to 57 deg outboard at 40% semi-span, producing the characteristic
+    "arrow" planform optimised for Mach 2.7 cruise.
+
+    The high sweep means bending loads resolve primarily into chordwise
+    compression (Nyy) and shear (Nxy) rather than streamwise compression
+    (Nxx).  This makes the structure shear-critical.
+    """
+    semi_span: float          = 22.25   # [m]  (146 ft total span)
+    root_chord: float         = 38.1    # [m]  at centreline
+    kink_chord: float         = 13.7    # [m]  at sweep break (40% span)
+    tip_chord: float          = 2.3     # [m]
+    kink_eta: float           = 0.40    # sweep break [fraction of semi-span]
+    sweep_inboard_deg: float  = 74.0    # LE sweep, inboard panel [deg]
+    sweep_outboard_deg: float = 57.0    # LE sweep, outboard panel [deg]
+    t_over_c: float           = 0.03    # structural thickness ratio
+    togw_kg: float            = 340_194 # [kg] take-off gross weight (750,000 lb)
+    wing_area_m2: float       = 855.0   # [m^2] reference planform area
+    stringer_pitch_m: float   = 0.180   # [m]  upper skin stringer spacing
+    box_chord_frac: float     = 0.55    # structural box = 55% of local chord
+    ea_chord_frac: float      = 0.38    # elastic axis at 38% chord
+    ac_supersonic_frac: float = 0.50    # aerodynamic centre (M > 1) at 50% chord
+    ac_subsonic_frac: float   = 0.25    # aerodynamic centre (M < 1) at 25% chord
+
+    @property
+    def weight_n(self) -> float:
+        """Take-off gross weight [N]."""
+        return self.togw_kg * 9.80665
+
+    def chord(self, eta: float) -> float:
+        """Local chord [m] at span fraction *eta* (0 = root, 1 = tip)."""
+        if eta <= self.kink_eta:
+            frac = eta / self.kink_eta
+            return self.root_chord + (self.kink_chord - self.root_chord) * frac
+        frac = (eta - self.kink_eta) / (1.0 - self.kink_eta)
+        return self.kink_chord + (self.tip_chord - self.kink_chord) * frac
+
+    def sweep_deg(self, eta: float) -> float:
+        """Local LE sweep angle [deg]."""
+        return self.sweep_inboard_deg if eta <= self.kink_eta else self.sweep_outboard_deg
+
+    def box_height(self, eta: float) -> float:
+        """Structural box height [m]."""
+        return self.t_over_c * self.chord(eta)
+
+    def box_chord(self, eta: float) -> float:
+        """Structural box chord (width) [m]."""
+        return self.box_chord_frac * self.chord(eta)
+
+
+# -----------------------------------------------------------------------
+# Internal spanwise load computation
+# -----------------------------------------------------------------------
+
+_N_INTEG = 500
+
+
+def _spanwise_loads(
+    geom: ArrowWingGeometry,
+    n_load: float,
+    ac_frac: float,
+) -> Tuple[_np.ndarray, _np.ndarray, _np.ndarray, _np.ndarray, _np.ndarray]:
+    """
+    Strip-theory spanwise distributions for the arrow-wing planform.
+
+    Returns
+    -------
+    eta_arr : array -- span fractions [0..1]
+    l_arr   : array -- lift per unit span [N/m]
+    V_arr   : array -- transverse shear [N]
+    M_arr   : array -- bending moment [N*m]
+    T_arr   : array -- torque about elastic axis [N*m]
+    """
+    b = geom.semi_span
+    L_half = geom.weight_n * n_load / 2.0
+
+    eta_arr = _np.linspace(0.0, 1.0, _N_INTEG)
+    y_arr = eta_arr * b
+    c_arr = _np.array([geom.chord(e) for e in eta_arr])
+
+    S_half = _trapz(c_arr, y_arr)
+    K = L_half / S_half
+    l_arr = K * c_arr
+
+    # Pitching moment per unit span about the elastic axis
+    delta_x_frac = ac_frac - geom.ea_chord_frac
+    m_arr = l_arr * delta_x_frac * c_arr
+
+    V_arr = _np.zeros(_N_INTEG)
+    M_arr = _np.zeros(_N_INTEG)
+    T_arr = _np.zeros(_N_INTEG)
+    for i in range(_N_INTEG):
+        sl = slice(i, None)
+        y_sl = y_arr[sl]
+        l_sl = l_arr[sl]
+        if len(y_sl) < 2:
+            continue
+        V_arr[i] = _trapz(l_sl, y_sl)
+        M_arr[i] = _trapz(l_sl * (y_sl - y_arr[i]), y_sl)
+        T_arr[i] = _trapz(m_arr[sl], y_sl)
+
+    return eta_arr, l_arr, V_arr, M_arr, T_arr
+
+
+def _interp(eta_arr: _np.ndarray, data_arr: _np.ndarray, eta: float) -> float:
+    """Linear interpolation of spanwise data at a given eta."""
+    return float(_np.interp(eta, eta_arr, data_arr))
+
+
+# -----------------------------------------------------------------------
+# Panel-level running loads
+# -----------------------------------------------------------------------
+
+def _make_panel_loads(
+    geom: ArrowWingGeometry,
+    eta: float,
+    mach: float,
+    altitude_m: float,
+    alpha_deg: float,
+    n_load: float,
+    delta_p: float,
+    M_bend: float,
+    V_shear: float,
+    T_torque: float,
+) -> LoadCase:
+    """Convert structural distributions into panel running loads at *eta*."""
+    c_loc = geom.chord(eta)
+    h_box = geom.box_height(eta)
+    c_box = geom.box_chord(eta)
+    sweep = _np.radians(geom.sweep_deg(eta))
+    b_panel = geom.stringer_pitch_m
+
+    # Spanwise running load from bending [N/m of chord].
+    # Upper skin carries compression; positive M_bend -> N_span negative.
+    N_span = -M_bend / max(h_box * c_box, 1e-6)
+
+    # Full Mohr transformation to panel axes (x = stream, y = chord).
+    # For arrow wings the sin^2 chordwise term is large and must not
+    # be neglected -- it dominates Nxx at sweep > 60 deg.
+    cos_L = _np.cos(sweep)
+    sin_L = _np.sin(sweep)
+
+    # Nxx: streamwise component of bending
+    Nxx = N_span * cos_L ** 2
+
+    # Nyy: chordwise bending + aerodynamic pressure between stringers
+    Nyy_bend = N_span * sin_L ** 2
+    Nyy_press = -delta_p * b_panel / 2.0
+    Nyy = Nyy_bend + Nyy_press
+
+    # Nxy: bending shear + spar web shear + Bredt torque
+    Nxy_bend = abs(N_span) * sin_L * cos_L
+    Nxy_spar = abs(V_shear) / max(2.0 * h_box, 1e-6) * 0.25
+    A_cell = h_box * c_box
+    Nxy_torque = abs(T_torque) / max(2.0 * A_cell, 1e-6)
+    Nxy = Nxy_bend + Nxy_spar + Nxy_torque
+
+    # Mxx: local panel bending from pressure (simply-supported between stringers)
+    Mxx = abs(delta_p) * b_panel ** 2 / 8.0
+
+    # Build case name: AW_M2p7_2p5g_eta15
+    mach_s = f"M{mach}".replace(".", "p")
+    n_s = f"{n_load}g".replace(".", "p").replace("-", "m")
+    name = f"AW_{mach_s}_{n_s}_eta{int(round(eta * 100)):02d}"
+
+    source = "CR-132575"
+    desc = (f"Arrow-Wing M{mach} {n_load}g "
+            f"alt={altitude_m / 1000:.0f}km a={alpha_deg}deg")
+
+    return LoadCase(
+        name=name, Nxx=float(Nxx), Nyy=float(Nyy), Nxy=float(Nxy),
+        Mxx=float(Mxx), source=source, eta=eta, description=desc,
+    )
+
+
+def arrow_wing_panel_loads(
+    eta: float,
+    mach: float,
+    altitude_m: float,
+    alpha_deg: float,
+    n_load: float = 2.5,
+    geom: ArrowWingGeometry | None = None,
+) -> LoadCase:
+    """
+    Upper wing skin panel loads at span station *eta* for the Arrow-Wing SST.
+
+    Uses strip-theory bending + Ackeret/Prandtl-Glauert pressure + full
+    Mohr stress transformation for the compound-sweep planform.
+
+    Parameters
+    ----------
+    eta        : span fraction (0 = root, 1 = tip)
+    mach       : freestream Mach (<=0.85 or >=1.15; transonic raises)
+    altitude_m : flight altitude [m]
+    alpha_deg  : angle of attack [deg]
+    n_load     : load factor (positive = pull-up)
+    geom       : override default CR-132575 geometry
+
+    Returns
+    -------
+    LoadCase with panel running loads [N/m] and moments [N*m/m].
+    """
+    if geom is None:
+        geom = ArrowWingGeometry()
+
+    rho, a_sound = _isa(altitude_m)
+    q = 0.5 * float(rho) * (mach * float(a_sound)) ** 2
+
+    if mach <= 0.85:
+        beta = _np.sqrt(1.0 - mach ** 2)
+    elif mach >= 1.15:
+        beta = _np.sqrt(mach ** 2 - 1.0)
+    else:
+        raise ValueError(
+            f"Mach {mach} is in the transonic gap (0.85 < M < 1.15). "
+            f"No closed-form pressure model available."
+        )
+
+    delta_p = 4.0 * _np.radians(alpha_deg) / beta * q
+    ac_frac = geom.ac_supersonic_frac if mach >= 1.15 else geom.ac_subsonic_frac
+
+    eta_arr, _, V_arr, M_arr, T_arr = _spanwise_loads(geom, n_load, ac_frac)
+    M_bend = _interp(eta_arr, M_arr, eta)
+    V_shear = _interp(eta_arr, V_arr, eta)
+    T_torque = _interp(eta_arr, T_arr, eta)
+
+    return _make_panel_loads(
+        geom, eta, mach, altitude_m, alpha_deg, n_load,
+        delta_p, M_bend, V_shear, T_torque,
+    )
+
+
+# -----------------------------------------------------------------------
+# Standard flight envelope
+# -----------------------------------------------------------------------
+
+# (mach, altitude_m, alpha_deg, n_load)
+FLIGHT_CONDITIONS = [
+    (2.7,  19_800,  3.0,  1.0),   # M2.7 design cruise, 65 kft
+    (2.7,  19_800,  7.5,  2.5),   # M2.7 limit maneuver
+    (2.7,  19_800, -3.0, -1.0),   # M2.7 pushover (FAR 25.337)
+    (1.6,  12_192,  5.0,  2.5),   # low-supersonic maneuver, 40 kft
+    (0.8,  10_668,  6.0,  2.5),   # subsonic maneuver, 35 kft
+    (0.6,   3_048,  5.0,  1.8),   # gust encounter, 10 kft
+    (0.3,       0, 10.0,  2.5),   # low-speed maneuver, sea level
+]
+
+SPAN_STATIONS = [0.15, 0.35, 0.50, 0.70, 0.90]
+
+
+def arrow_wing_loads_database(
+    geom: ArrowWingGeometry | None = None,
+    conditions: list | None = None,
+    stations: list | None = None,
+) -> LoadsDatabase:
+    """
+    Generate the Arrow-Wing structural loads database.
+
+    Returns a :class:`LoadsDatabase` with panel running loads at multiple
+    span stations and flight conditions, ready for multi-case laminate
+    sizing with :func:`optimize_laminate_multicase`.
+
+    Default: 7 flight conditions x 5 span stations = 35 load cases spanning
+    Mach 0.3-2.7, +2.5g to -1.0g, sea level to 65 kft.
+    """
+    if geom is None:
+        geom = ArrowWingGeometry()
+    if conditions is None:
+        conditions = FLIGHT_CONDITIONS
+    if stations is None:
+        stations = SPAN_STATIONS
+
+    cases: list[LoadCase] = []
+    for mach, alt, alpha, n_load in conditions:
+        # Atmospheric state & pressure for this flight point
+        rho, a_sound = _isa(alt)
+        q = 0.5 * float(rho) * (mach * float(a_sound)) ** 2
+
+        if mach <= 0.85:
+            beta = _np.sqrt(1.0 - mach ** 2)
+        elif mach >= 1.15:
+            beta = _np.sqrt(mach ** 2 - 1.0)
+        else:
+            raise ValueError(f"Mach {mach} in transonic gap")
+
+        delta_p = 4.0 * _np.radians(alpha) / beta * q
+        ac_frac = (geom.ac_supersonic_frac if mach >= 1.15
+                   else geom.ac_subsonic_frac)
+
+        # Spanwise distributions -- computed once per flight condition
+        eta_arr, _, V_arr, M_arr, T_arr = _spanwise_loads(
+            geom, n_load, ac_frac
+        )
+
+        for eta in stations:
+            M_bend = _interp(eta_arr, M_arr, eta)
+            V_shear = _interp(eta_arr, V_arr, eta)
+            T_torque = _interp(eta_arr, T_arr, eta)
+
+            case = _make_panel_loads(
+                geom, eta, mach, alt, alpha, n_load,
+                delta_p, M_bend, V_shear, T_torque,
+            )
+            cases.append(case)
+
+    return LoadsDatabase(cases)
+
+
+# -----------------------------------------------------------------------
+# CLI: generate CSV + summary
+# -----------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import sys
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    db = arrow_wing_loads_database()
+    print(db.summary())
+    print()
+
+    env = db.envelope_case()
+    print(f"Envelope:  Nxx={env.Nxx / 1e3:.0f} kN/m,  "
+          f"Nyy={env.Nyy / 1e3:.0f} kN/m,  Nxy={env.Nxy / 1e3:.0f} kN/m")
+    print()
+
+    out = os.path.join(os.path.dirname(__file__),
+                       "..", "..", "scripts", "arrow_wing_cr132575.csv")
+    db.to_csv(out)
+    print(f"Wrote {len(db)} cases to {os.path.abspath(out)}")
