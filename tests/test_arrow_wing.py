@@ -156,12 +156,13 @@ class TestArrowWingPanelLoads:
         )
         assert case.eta == pytest.approx(0.70)
 
-    def test_source_is_cr132575(self):
+    def test_source_identifies_method(self):
         case = arrow_wing_panel_loads(
             eta=0.35, mach=2.7, altitude_m=19_800,
             alpha_deg=3.0, n_load=1.0,
         )
-        assert "CR-132575" in case.source
+        assert "strip-theory" in case.source
+        assert "Ackeret" in case.source  # supersonic regime
 
     def test_mxx_positive(self):
         """Pressure bending moment should be positive."""
@@ -201,8 +202,8 @@ class TestArrowWingDatabase:
 
     def test_filter_source(self):
         db = arrow_wing_loads_database()
-        cr = db.filter_source("CR-132575")
-        assert len(cr) == len(db)
+        st = db.filter_source("strip-theory")
+        assert len(st) == len(db)
 
     def test_custom_geometry(self):
         geom = ArrowWingGeometry(togw_kg=200_000)
